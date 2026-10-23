@@ -70,7 +70,12 @@ jobs:
         run: |
           missing=()
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD FIREBASE_SERVICE_ACCOUNT_JSON FIREBASE_ANDROID_APP_ID FIREBASE_PROJECT_ID FIREBASE_API_KEY FIREBASE_MESSAGING_SENDER_ID FIREBASE_TESTER_EMAILS GOOGLE_SERVER_CLIENT_ID; do
-            if [ -z "${!name}" ]; then missing+=("$name"); fi
+            if [ -z "${!name}" ]; then
+              printf 'MISSING: %s\n' "$name"
+              missing+=("$name")
+            else
+              printf 'SET: %s (value hidden)\n' "$name"
+            fi
           done
           if [ "${#missing[@]}" -gt 0 ]; then
             printf 'Missing uat environment values: %s\n' "${missing[*]}" >&2
