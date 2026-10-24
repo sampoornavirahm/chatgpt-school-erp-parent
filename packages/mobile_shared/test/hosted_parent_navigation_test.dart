@@ -171,18 +171,7 @@ void main() {
       find.textContaining('Status: Medical leave · Period 2'),
       findsOneWidget,
     );
-    final currentAttendanceCard = find.ancestor(
-      of: find.text('23/10/2026'),
-      matching: find.byType(Card),
-    );
-    expect(currentAttendanceCard, findsOneWidget);
-    expect(
-      find.descendant(
-        of: currentAttendanceCard,
-        matching: find.textContaining('Stale · '),
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('Stale · 23/10/2026 at 12:30 PM'), findsOneWidget);
     await tester.ensureVisible(find.text('23/10/2026'));
     await tester.tap(find.text('23/10/2026'));
     await tester.pumpAndSettle();
