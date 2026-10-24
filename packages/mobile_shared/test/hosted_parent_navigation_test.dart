@@ -171,7 +171,7 @@ void main() {
       find.textContaining('Status: Medical leave · Period 2'),
       findsOneWidget,
     );
-    expect(find.textContaining('Updated '), findsOneWidget);
+    expect(find.textContaining('Stale · '), findsOneWidget);
     await tester.ensureVisible(find.text('23/10/2026'));
     await tester.tap(find.text('23/10/2026'));
     await tester.pumpAndSettle();
