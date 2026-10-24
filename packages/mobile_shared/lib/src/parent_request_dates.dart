@@ -35,3 +35,17 @@ String? validateOptionalRequestDateRange({
   }
   return null;
 }
+
+String? validateAttendanceCorrectionDate(String? input) {
+  final value = input?.trim() ?? '';
+  if (value.isEmpty) return 'Choose the date of the attendance record.';
+  final formatError = validateOptionalIsoDate(value, label: 'attendance date');
+  if (formatError != null) return formatError;
+  final now = DateTime.now();
+  final today =
+      '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  if (value.compareTo(today) > 0) {
+    return 'Choose today or an earlier date.';
+  }
+  return null;
+}

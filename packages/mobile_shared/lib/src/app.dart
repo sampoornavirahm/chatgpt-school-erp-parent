@@ -9,11 +9,14 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:school_erp_mobile_shared/src/api_client.dart';
+import 'package:school_erp_mobile_shared/src/calendar_event_presentation.dart';
 import 'package:school_erp_mobile_shared/src/firebase_services.dart';
+import 'package:school_erp_mobile_shared/src/meeting_link.dart';
 import 'package:school_erp_mobile_shared/src/parent_biometric_service.dart';
 import 'package:school_erp_mobile_shared/src/offline_sync_store.dart';
 import 'package:school_erp_mobile_shared/src/parent_request_dates.dart';
 import 'package:school_erp_mobile_shared/src/offline_sync_service.dart';
+import 'package:school_erp_mobile_shared/src/timetable_projection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -97,10 +100,23 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   static const _hubModeKey = 'school_erp_local_hub_mode';
   static const _hubSchoolIdKey = 'school_erp_hub_school_id';
   static const _parentBiometricKey = 'school_erp_parent_biometric_unlock';
+  static const _parentTextScaleKey = 'school_erp_parent_text_scale';
+  static const _parentNotificationPreferencePrefix =
+      'school_erp_parent_notification_preferences_';
+  static const _defaultParentNotificationPreferences = <String, bool>{
+    'school_notice': true,
+    'schedule_update': true,
+    'homework_update': true,
+  };
   static bool _googleSignInInitialized = false;
   final _api = ApiClient();
   StreamSubscription<RemoteMessage>? _messageSubscription;
+  StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
   StreamSubscription<String>? _tokenSubscription;
+  bool _initialMessageChecked = false;
+  int _notificationRevision = 0;
+  String? _notificationType;
+  bool _notificationOpened = false;
   bool _loading = true;
   bool _working = false;
   bool _signedIn = false;
@@ -110,6 +126,7 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   bool _setupJustCompleted = false;
   bool _analyticsConsent = false;
   bool _biometricEnabled = false;
+  double _parentTextScale = 1.0;
   bool _biometricLocked = false;
   bool _updatePromptShown = false;
   bool _updateCheckRunning = false;
@@ -123,6 +140,16 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   String? _schoolId;
   List<Map<String, dynamic>> _parentChildren = [];
   List<Map<String, dynamic>> _parentCommands = [];
+  List<Map<String, dynamic>> _parentSupportTickets = [];
+  bool _parentSupportAvailable = true;
+  bool _parentCacheCleared = false;
+  String? _pendingSupportFingerprint;
+  String? _pendingSupportOperationId;
+  String? _pendingPublicSupportFingerprint;
+  String? _pendingPublicSupportOperationId;
+  Map<String, bool> _parentNotificationPreferences = {
+    ..._defaultParentNotificationPreferences,
+  };
 
   @override
   void initState() {
@@ -143,6 +170,7 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messageSubscription?.cancel();
+    _messageOpenedSubscription?.cancel();
     _tokenSubscription?.cancel();
     super.dispose();
   }
@@ -168,6 +196,12 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     _schoolId = preferences.getString(_hubSchoolIdKey);
     _analyticsConsent =
         preferences.getBool('school_erp_analytics_consent') ?? false;
+    _parentTextScale =
+        widget.role == MobileRole.parent
+            ? (preferences.getDouble(_parentTextScaleKey) ?? 1.0)
+                .clamp(0.85, 1.5)
+                .toDouble()
+            : 1.0;
     _biometricEnabled =
         widget.role == MobileRole.parent &&
         (preferences.getBool(_parentBiometricKey) ?? false);
@@ -421,6 +455,13 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     await _api.clearCachedIdentity();
     _parentChildren = [];
     _parentCommands = [];
+    _parentSupportTickets = [];
+    _parentCacheCleared = false;
+    _pendingSupportFingerprint = null;
+    _pendingSupportOperationId = null;
+    _pendingPublicSupportFingerprint = null;
+    _pendingPublicSupportOperationId = null;
+    _parentSupportAvailable = true;
     if (!mounted) return;
     setState(() {
       _biometricEnabled = false;
@@ -904,6 +945,89 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       _parentCommands,
       await store.hostedParentOutbox(),
     );
+    await _loadCachedParentNotificationPreferences(user);
+  }
+
+  String _parentNotificationPreferenceKey(Map<String, dynamic> user) =>
+      '$_parentNotificationPreferencePrefix${user['id'] ?? user['email'] ?? 'parent'}';
+
+  Map<String, bool> _parseParentNotificationPreferences(Object? value) {
+    final preferences = <String, bool>{
+      ..._defaultParentNotificationPreferences,
+    };
+    if (value is Map) {
+      for (final category in preferences.keys.toList()) {
+        if (value[category] is bool)
+          preferences[category] = value[category] as bool;
+      }
+    }
+    return preferences;
+  }
+
+  Future<void> _loadCachedParentNotificationPreferences(
+    Map<String, dynamic> user,
+  ) async {
+    final storage = await SharedPreferences.getInstance();
+    final encoded = storage.getString(_parentNotificationPreferenceKey(user));
+    if (encoded == null) {
+      _parentNotificationPreferences = {
+        ..._defaultParentNotificationPreferences,
+      };
+      return;
+    }
+    try {
+      _parentNotificationPreferences = _parseParentNotificationPreferences(
+        jsonDecode(encoded),
+      );
+    } on FormatException {
+      _parentNotificationPreferences = {
+        ..._defaultParentNotificationPreferences,
+      };
+    }
+  }
+
+  Future<void> _saveCachedParentNotificationPreferences(
+    Map<String, dynamic> user,
+  ) async {
+    final storage = await SharedPreferences.getInstance();
+    await storage.setString(
+      _parentNotificationPreferenceKey(user),
+      jsonEncode(_parentNotificationPreferences),
+    );
+  }
+
+  Future<void> _updateParentNotificationPreference(
+    String category,
+    bool enabled,
+  ) async {
+    final user = _user;
+    if (user == null || !_parentNotificationPreferences.containsKey(category)) {
+      return;
+    }
+    final priorValue = _parentNotificationPreferences[category]!;
+    setState(() {
+      _working = true;
+      _error = null;
+      _success = null;
+      _parentNotificationPreferences[category] = enabled;
+    });
+    try {
+      await _api.updateHostedParentNotificationPreference(
+        category: category,
+        enabled: enabled,
+      );
+      await _saveCachedParentNotificationPreferences(user);
+      if (mounted) setState(() => _success = 'Notification preference saved.');
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _parentNotificationPreferences[category] = priorValue;
+          _error = error.message;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
   }
 
   List<Map<String, dynamic>> _mapRows(Object? rows) =>
@@ -979,12 +1103,58 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   Future<void> _loadHostedParentData({
     required Map<String, dynamic> user,
   }) async {
+    await _loadCachedParentNotificationPreferences(user);
     final store = await _openHostedParentStore(user);
     try {
       await _pushHostedParentOutbox(store);
       final childrenResponse = await _api.hostedParentChildren();
       final commandsResponse = await _api.hostedParentCommands();
+      try {
+        final supportResponse = await _api.hostedParentSupportTickets();
+        _parentSupportTickets = _mapRows(supportResponse['tickets']);
+        _parentSupportAvailable = true;
+      } on ApiException catch (error) {
+        if (error.statusCode == 401 || error.statusCode == 403) rethrow;
+        if (error.statusCode == 404) _parentSupportAvailable = false;
+      }
+      ApiException? notificationPreferenceError;
+      try {
+        final notificationResponse =
+            await _api.hostedParentNotificationPreferences();
+        _parentNotificationPreferences = _parseParentNotificationPreferences(
+          notificationResponse['preferences'],
+        );
+        await _saveCachedParentNotificationPreferences(user);
+      } on ApiException catch (error) {
+        if (error.statusCode == null ||
+            error.statusCode == 401 ||
+            error.statusCode == 403) {
+          rethrow;
+        }
+        notificationPreferenceError = error;
+      }
       _parentChildren = _mapRows(childrenResponse['children']);
+      final calendarBySchool = <String, List<Map<String, dynamic>>>{};
+      for (final event in _mapRows(childrenResponse['calendarEvents'])) {
+        final schoolId = event['schoolId']?.toString() ?? '';
+        if (schoolId.isNotEmpty) {
+          (calendarBySchool[schoolId] ??= []).add(event);
+        }
+      }
+      final attachedCalendars = <String>{};
+      final projectedAtBySchool = Map<String, dynamic>.from(
+        childrenResponse['calendarProjectedAtBySchool'] as Map? ?? {},
+      );
+      for (final child in _parentChildren) {
+        final schoolId = child['schoolId']?.toString() ?? '';
+        child['schoolCalendar'] =
+            attachedCalendars.add(schoolId)
+                ? calendarBySchool[schoolId] ?? <Map<String, dynamic>>[]
+                : <Map<String, dynamic>>[];
+        child['schoolCalendarProjectedAt'] =
+            projectedAtBySchool[schoolId]?.toString() ??
+            childrenResponse['calendarProjectedAt']?.toString();
+      }
       _parentCommands = _mergeParentCommands(
         _mapRows(commandsResponse['commands']),
         await store.hostedParentOutbox(),
@@ -993,7 +1163,8 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
         children: _parentChildren,
         commands: _parentCommands,
       );
-      _error = null;
+      _parentCacheCleared = false;
+      _error = notificationPreferenceError?.message;
       _offline = false;
     } on ApiException catch (error) {
       if (error.statusCode == 401 || error.statusCode == 403) {
@@ -1004,6 +1175,12 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
         _offline = false;
         _parentChildren = [];
         _parentCommands = [];
+        _parentSupportTickets = [];
+        _parentCacheCleared = false;
+        _pendingSupportFingerprint = null;
+        _pendingSupportOperationId = null;
+        _pendingPublicSupportFingerprint = null;
+        _pendingPublicSupportOperationId = null;
         _error = error.message;
         rethrow;
       }
@@ -1077,6 +1254,142 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     }
   }
 
+  Future<void> _submitHostedParentSupportTicket(
+    Map<String, String> values,
+  ) async {
+    setState(() {
+      _working = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      if (_user == null) {
+        throw const ApiException('Sign in again to contact support.');
+      }
+      final fingerprint = jsonEncode([
+        values['category'] ?? 'other',
+        values['subject']?.trim() ?? '',
+        values['message']?.trim() ?? '',
+        values['studentPublicId'] ?? '',
+      ]);
+      if (_pendingSupportFingerprint != fingerprint ||
+          _pendingSupportOperationId == null) {
+        _pendingSupportFingerprint = fingerprint;
+        _pendingSupportOperationId = _api.newOperationId();
+      }
+      final response = await _api.submitHostedParentSupportTicket(
+        operationId: _pendingSupportOperationId!,
+        category: values['category'] ?? 'other',
+        subject: values['subject']?.trim() ?? '',
+        message: values['message']?.trim() ?? '',
+        studentPublicId: values['studentPublicId'],
+      );
+      _pendingSupportFingerprint = null;
+      _pendingSupportOperationId = null;
+      _parentSupportAvailable = true;
+      try {
+        final ticketsResponse = await _api.hostedParentSupportTickets();
+        _parentSupportTickets = _mapRows(ticketsResponse['tickets']);
+      } on ApiException catch (error) {
+        if (error.statusCode == 401 || error.statusCode == 403) rethrow;
+      }
+      if (mounted) {
+        setState(() {
+          _success =
+              'Support request ${response['reference'] ?? ''} was submitted. You can track its status below.';
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _submitPublicParentLoginSupportTicket(
+    Map<String, String> values,
+  ) async {
+    setState(() {
+      _working = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      final fingerprint = jsonEncode([
+        values['name']?.trim() ?? '',
+        values['email']?.trim().toLowerCase() ?? '',
+        values['phone']?.replaceAll(RegExp(r'\D+'), '') ?? '',
+        values['school']?.trim() ?? '',
+        values['subject']?.trim() ?? '',
+        values['message']?.trim() ?? '',
+      ]);
+      if (_pendingPublicSupportFingerprint != fingerprint ||
+          _pendingPublicSupportOperationId == null) {
+        _pendingPublicSupportFingerprint = fingerprint;
+        _pendingPublicSupportOperationId = _api.newOperationId();
+      }
+      final response = await _api.submitPublicParentLoginSupportTicket(
+        operationId: _pendingPublicSupportOperationId!,
+        name: values['name']?.trim() ?? '',
+        email: values['email']?.trim() ?? '',
+        phone: values['phone']?.trim() ?? '',
+        school: values['school'],
+        subject: values['subject']?.trim() ?? '',
+        message: values['message']?.trim() ?? '',
+      );
+      _pendingPublicSupportFingerprint = null;
+      _pendingPublicSupportOperationId = null;
+      if (mounted) {
+        setState(() {
+          _success =
+              'Request ${response['reference'] ?? ''} was sent to the operator. After signing in with the same email and phone, you can follow its status in Explore.';
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _clearHostedParentCache() async {
+    setState(() {
+      _working = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      final user = _user;
+      if (user == null) {
+        throw const ApiException(
+          'Sign in again to manage saved school information.',
+        );
+      }
+      final store = await _openHostedParentStore(user);
+      await store.clearHostedParentCache();
+      _parentChildren = [];
+      _parentCommands = await store.hostedParentOutbox();
+      _parentSupportTickets = [];
+      _parentCacheCleared = true;
+      if (mounted) {
+        setState(() {
+          _success =
+              'Saved school information was removed from this phone. Refresh when you want to download it again.';
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'Could not remove the saved school information.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
   Future<void> _enableNotifications() async {
     setState(() {
       _working = true;
@@ -1145,15 +1458,81 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   }
 
   void _startMessagingListeners() {
-    _messageSubscription ??= FirebaseMessaging.onMessage.listen((_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You have a new school update.')),
-      );
-    });
+    _messageSubscription ??= FirebaseMessaging.onMessage.listen(
+      (message) => unawaited(_handleSchoolNotification(message, opened: false)),
+    );
+    _messageOpenedSubscription ??= FirebaseMessaging.onMessageOpenedApp.listen(
+      (message) => unawaited(_handleSchoolNotification(message, opened: true)),
+    );
+    if (!_initialMessageChecked) {
+      _initialMessageChecked = true;
+      unawaited(_handleInitialSchoolNotification());
+    }
     _tokenSubscription ??= FirebaseMessaging.instance.onRegistered.listen(
       _registerFcmInstallation,
     );
+  }
+
+  Future<void> _handleInitialSchoolNotification() async {
+    try {
+      final message = await FirebaseMessaging.instance.getInitialMessage();
+      if (message != null) {
+        await _handleSchoolNotification(message, opened: true);
+      }
+    } catch (_) {
+      // Notifications are optional; a failed launch-message read must not block sign-in.
+    }
+  }
+
+  Future<void> _handleSchoolNotification(
+    RemoteMessage message, {
+    required bool opened,
+  }) async {
+    if (!_signedIn || _user == null) return;
+    final type = message.data['type']?.toString() ?? '';
+    if (mounted) {
+      setState(() {
+        _notificationRevision++;
+        _notificationType = type;
+        _notificationOpened = opened;
+      });
+    }
+    try {
+      if (_hubMode) {
+        // _HubWorkspace observes the revision and syncs the local school Hub.
+      } else if (_user!['role'] == 'parent') {
+        await _loadHostedParentData(user: _user!);
+        if (mounted) setState(() {});
+      } else {
+        // Teacher learning records are refreshed by the paired Hub workspace.
+        await _api.currentUser();
+      }
+    } on ApiException catch (error) {
+      if (error.statusCode == 401 || error.statusCode == 403) {
+        await _api.clearToken();
+        if (mounted) {
+          setState(() {
+            _signedIn = false;
+            _user = null;
+            _error = error.message;
+          });
+        }
+        return;
+      }
+    } catch (_) {
+      // Cached school data remains visible when the network is unavailable.
+    }
+    if (!mounted) return;
+    final text = switch (type) {
+      'schedule_update' =>
+        'The school schedule was updated. Open Learning to see the latest timetable and calendar.',
+      'homework_update' =>
+        'New homework is available. Open Learning to review the assignment and due date.',
+      'school_notice' => 'A new school notice is available in Inbox.',
+      _ =>
+        'You have a new school update. Pull to refresh if details are not current.',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _registerFcmInstallation(String fid) async {
@@ -1180,6 +1559,14 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       setState(() {
         _signedIn = false;
         _user = null;
+        _parentChildren = [];
+        _parentCommands = [];
+        _parentSupportTickets = [];
+        _parentCacheCleared = false;
+        _pendingSupportFingerprint = null;
+        _pendingSupportOperationId = null;
+        _pendingPublicSupportFingerprint = null;
+        _pendingPublicSupportOperationId = null;
         _error = null;
       });
   }
@@ -1200,8 +1587,10 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       }
     }
     await _messageSubscription?.cancel();
+    await _messageOpenedSubscription?.cancel();
     await _tokenSubscription?.cancel();
     _messageSubscription = null;
+    _messageOpenedSubscription = null;
     _tokenSubscription = null;
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool('school_erp_notifications_enabled', false);
@@ -1214,12 +1603,32 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     if (mounted) setState(() => _analyticsConsent = value);
   }
 
+  Future<void> _saveParentTextScale(double value) async {
+    final textScale = value.clamp(0.85, 1.5).toDouble();
+    if (mounted) setState(() => _parentTextScale = textScale);
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setDouble(_parentTextScaleKey, textScale);
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'School ERP ${widget.role.title}',
       debugShowCheckedModeBanner: false,
       theme: _theme,
+      builder: (context, child) {
+        if (widget.role != MobileRole.parent) return child ?? const SizedBox();
+        final media = MediaQuery.of(context);
+        return MediaQuery(
+          data: media.copyWith(
+            textScaler: _PreferenceTextScaler(
+              media.textScaler,
+              _parentTextScale,
+            ),
+          ),
+          child: child ?? const SizedBox(),
+        );
+      },
       home: Scaffold(
         body: DecoratedBox(
           decoration: const BoxDecoration(
@@ -1271,6 +1680,9 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
           onBiometricChanged: _setParentBiometricUnlock,
           onSignOut: _signOut,
           onChangeServer: _changeServer,
+          notificationRevision: _notificationRevision,
+          notificationType: _notificationType,
+          notificationOpened: _notificationOpened,
         );
       }
       return _HubLoginView(
@@ -1329,22 +1741,36 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       return _HomeView(
         role: widget.role,
         user: _user!,
+        api: _api,
         hostedParent: !_hubMode && _user!['role'] == 'parent',
         parentChildren: _parentChildren,
         parentCommands: _parentCommands,
+        parentSupportTickets: _parentSupportTickets,
+        parentSupportAvailable: _parentSupportAvailable,
+        parentCacheCleared: _parentCacheCleared,
         analyticsConsent: _analyticsConsent,
+        isOffline: _offline,
         success: _success,
         error: _error,
         working: _working,
         showWelcomeCard: FirebaseServices.showWelcomeCard,
         onEnableNotifications: _enableNotifications,
+        notificationPreferences: _parentNotificationPreferences,
+        onNotificationPreferenceChanged: _updateParentNotificationPreference,
+        textScale: _parentTextScale,
+        onTextScaleChanged: _saveParentTextScale,
         onConsentChanged: _saveConsent,
         onRefreshHostedParent: _refreshHostedParentData,
         onSubmitHostedParentRequest: _submitHostedParentRequest,
+        onSubmitHostedParentSupportTicket: _submitHostedParentSupportTicket,
+        onClearHostedParentCache: _clearHostedParentCache,
         onSignOut: _signOut,
         onChangeServer: _changeServer,
         biometricEnabled: _biometricEnabled,
         onBiometricChanged: _setParentBiometricUnlock,
+        notificationRevision: _notificationRevision,
+        notificationType: _notificationType,
+        notificationOpened: _notificationOpened,
       );
     }
     return _LoginView(
@@ -1358,6 +1784,7 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       serverUrl: _api.baseUrl!,
       onConsentChanged: _saveConsent,
       onSubmit: _signIn,
+      onSubmitLoginSupport: _submitPublicParentLoginSupportTicket,
       onChangeServer: _changeServer,
     );
   }
@@ -1732,6 +2159,9 @@ class _HubWorkspace extends StatefulWidget {
     required this.onBiometricChanged,
     required this.onSignOut,
     required this.onChangeServer,
+    required this.notificationRevision,
+    required this.notificationType,
+    required this.notificationOpened,
   });
 
   final MobileRole role;
@@ -1744,6 +2174,9 @@ class _HubWorkspace extends StatefulWidget {
   final ValueChanged<bool> onBiometricChanged;
   final VoidCallback onSignOut;
   final VoidCallback onChangeServer;
+  final int notificationRevision;
+  final String? notificationType;
+  final bool notificationOpened;
 
   @override
   State<_HubWorkspace> createState() => _HubWorkspaceState();
@@ -1753,6 +2186,8 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
   OfflineSyncStore? _store;
   OfflineSyncService? _syncService;
   List<Map<String, dynamic>> _timetable = [];
+  String? _timetableLastUpdatedAt;
+  List<Map<String, dynamic>> _schoolCalendar = [];
   List<Map<String, dynamic>> _homework = [];
   List<Map<String, dynamic>> _announcements = [];
   List<Map<String, dynamic>> _examMarks = [];
@@ -1763,23 +2198,29 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
   List<Map<String, Object?>> _sections = [];
   List<Map<String, Object?>> _students = [];
   List<Map<String, Object?>> _attendance = [];
+  List<Map<String, dynamic>> _attendanceStatuses = [];
   Map<String, int> _counts = {};
   final Map<String, String> _draftStatuses = {};
   final _dateController = TextEditingController();
   String? _selectedSection;
+  int _attendancePeriod = 0;
   String? _selectedParentStudentId;
   String _activeTab = '';
   late String _date;
+  bool _showWeeklyTimetable = false;
   bool _loading = true;
   bool _busy = false;
   bool _offline = false;
   String? _message;
   Timer? _retryTimer;
+  late int _handledNotificationRevision;
+  bool _notificationSyncPending = false;
 
   @override
   void initState() {
     super.initState();
     _offline = widget.offlineAtLaunch;
+    _handledNotificationRevision = widget.notificationRevision;
     _activeTab = widget.role == MobileRole.teacher ? 'Overview' : 'Children';
     final today = DateTime.now();
     _date =
@@ -1789,6 +2230,31 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
     _retryTimer = Timer.periodic(const Duration(minutes: 2), (_) {
       if (mounted && !_busy) unawaited(_syncNow(showMessage: false));
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _HubWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.notificationRevision == _handledNotificationRevision) return;
+    _handledNotificationRevision = widget.notificationRevision;
+    if (widget.notificationOpened) {
+      final targetTab = switch (widget.notificationType) {
+        'schedule_update' =>
+          widget.role == MobileRole.parent ? 'Learning' : 'Overview',
+        'homework_update' =>
+          widget.role == MobileRole.parent ? 'Learning' : 'Homework',
+        'school_notice' => 'Notices',
+        _ => null,
+      };
+      if (targetTab != null && _tabs.contains(targetTab)) {
+        _activeTab = targetTab;
+      }
+    }
+    if (_busy) {
+      _notificationSyncPending = true;
+    } else {
+      unawaited(_syncNow(showMessage: false));
+    }
   }
 
   @override
@@ -1837,9 +2303,17 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
           widget.role == MobileRole.teacher ? _selectedSection : null,
     );
     final marks = await store.attendanceRows();
-    final queuedDrafts = await store.queuedAttendanceDrafts(_date);
+    final queuedDrafts = await store.queuedAttendanceDrafts(
+      _date,
+      period: _attendancePeriod,
+    );
+    final attendanceStatuses = await store.mobileRecords('attendanceStatuses');
     final counts = await store.statusCounts();
     final timetable = await store.mobileRecords('timetable');
+    final timetableLastUpdatedAt = await store.mobileRecordsUpdatedAt(
+      'timetable',
+    );
+    final schoolCalendar = await store.mobileRecords('schoolCalendar');
     final homework = await store.mobileRecords('homework');
     final announcements = await store.mobileRecords('announcements');
     final examMarks = await store.mobileRecords('examMarks');
@@ -1852,8 +2326,11 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
       _sections = sections;
       _students = attendance;
       _attendance = marks;
+      _attendanceStatuses = attendanceStatuses;
       _counts = counts;
       _timetable = timetable;
+      _timetableLastUpdatedAt = timetableLastUpdatedAt;
+      _schoolCalendar = schoolCalendar;
       _homework = homework;
       _announcements = announcements;
       _examMarks = examMarks;
@@ -1866,13 +2343,14 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
         Map<String, Object?>? row;
         for (final mark in marks) {
           if (mark['student_public_id'] == id &&
-              mark['attendance_date'] == _date) {
+              mark['attendance_date'] == _date &&
+              (mark['period'] ?? 0) == _attendancePeriod) {
             row = mark;
             break;
           }
         }
         _draftStatuses.putIfAbsent(
-          id,
+          _attendanceDraftKey(id, _attendancePeriod),
           () => row?['status']?.toString() ?? 'present',
         );
       }
@@ -1883,7 +2361,8 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                   as Map<String, dynamic>;
           final id = payload['studentPublicId']?.toString();
           if (id != null)
-            _draftStatuses[id] = payload['status']?.toString() ?? 'present';
+            _draftStatuses[_attendanceDraftKey(id, _attendancePeriod)] =
+                payload['status']?.toString() ?? 'present';
         } catch (_) {
           // Ignore an unreadable older queue row and keep the last cached value.
         }
@@ -1921,7 +2400,13 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
             'Offline changes stay saved on this device and will retry when the Hub is reachable.';
       await _reloadLocal();
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        if (_notificationSyncPending) {
+          _notificationSyncPending = false;
+          unawaited(_syncNow(showMessage: false));
+        }
+      }
     }
   }
 
@@ -1935,8 +2420,14 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
     final store = _store;
     if (store == null) return;
     final publicId = student['public_id']?.toString() ?? '';
-    final current = await store.attendance(publicId, _date);
-    final status = _draftStatuses[publicId] ?? 'present';
+    final current = await store.attendance(
+      publicId,
+      _date,
+      period: _attendancePeriod,
+    );
+    final status =
+        _draftStatuses[_attendanceDraftKey(publicId, _attendancePeriod)] ??
+        'present';
     var correctionReason = '';
     if (current != null && current['status'] != status) {
       final reason = await _askCorrectionReason();
@@ -1954,6 +2445,7 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
       baseRevision:
           current == null ? null : int.tryParse(current['revision'].toString()),
       correctionReason: correctionReason,
+      period: _attendancePeriod,
     );
     if (mounted)
       setState(
@@ -1996,12 +2488,28 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
   String? _localAttendance(String studentId) {
     for (final row in _attendance) {
       if (row['student_public_id'] == studentId &&
-          row['attendance_date'] == _date) {
-        return row['status']?.toString();
+          row['attendance_date'] == _date &&
+          (row['period'] ?? 0) == _attendancePeriod) {
+        final label = row['status_label']?.toString() ?? '';
+        return label.isNotEmpty ? label : row['status']?.toString();
       }
     }
     return null;
   }
+
+  String _attendanceDraftKey(String studentId, int period) =>
+      '$studentId:$period';
+
+  List<Map<String, dynamic>> get _attendanceStatusOptions =>
+      _attendanceStatuses.isEmpty
+          ? const [
+            {'statusKey': 'present', 'label': 'Present'},
+            {'statusKey': 'absent', 'label': 'Absent'},
+            {'statusKey': 'late', 'label': 'Late'},
+            {'statusKey': 'excused', 'label': 'Excused'},
+            {'statusKey': 'early_departure', 'label': 'Early departure'},
+          ]
+          : _attendanceStatuses;
 
   List<String> get _tabs =>
       widget.role == MobileRole.teacher
@@ -2111,9 +2619,10 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
             title:
                 '${row['startTime'] ?? ''}–${row['endTime'] ?? ''} · ${row['subjectName'] ?? 'Class'}',
             subtitle:
-                '${row['className'] ?? ''} · ${row['sectionName'] ?? ''} · ${row['room'] ?? 'Room not set'}',
+                '${row['className'] ?? ''} · ${row['sectionName'] ?? ''} · ${row['teacherName'] ?? 'Teacher not assigned'} · ${row['room'] ?? 'Room not set'}',
             trailing:
                 'Day ${row['weekday'] ?? '—'} · Period ${row['period'] ?? '—'}',
+            action: SchoolMeetingLinkButton(link: row['meetingLink']),
           ),
         ),
   ];
@@ -2281,22 +2790,81 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
         ),
       );
     }),
-    if (_timetable.isNotEmpty) ...[
-      _sectionHeading('Timetable'),
-      ..._timetable
-          .take(20)
-          .map(
-            (row) => _recordCard(
-              icon: Icons.schedule_outlined,
-              title:
-                  '${row['subjectName'] ?? 'Class'} · ${row['startTime'] ?? ''}',
-              subtitle:
-                  '${row['className'] ?? ''} · ${row['sectionName'] ?? ''}',
-              trailing: 'Day ${row['weekday'] ?? '—'}',
-            ),
+    const SizedBox(height: 8),
+    const Text('Timetable view', style: TextStyle(fontWeight: FontWeight.w700)),
+    const SizedBox(height: 6),
+    Text(
+      timetableSyncLabel(_timetableLastUpdatedAt),
+      style: const TextStyle(fontSize: 12, color: Color(0xff68778b)),
+    ),
+    const SizedBox(height: 6),
+    SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment<bool>(value: false, label: Text('Today')),
+        ButtonSegment<bool>(value: true, label: Text('Week')),
+      ],
+      selected: {_showWeeklyTimetable},
+      onSelectionChanged:
+          (selection) => setState(() => _showWeeklyTimetable = selection.first),
+    ),
+    _sectionHeading('Timetable'),
+    if (_timetable.isEmpty)
+      const _InfoBanner(text: 'No timetable entries are available offline.'),
+    if (_timetable.isNotEmpty && _visibleTimetable.isEmpty)
+      _InfoBanner(
+        text:
+            'No classes are scheduled for ${timetableWeekdayLabel(DateTime.now().weekday)}.',
+      ),
+    ..._visibleTimetable
+        .take(30)
+        .map(
+          (row) => _recordCard(
+            icon: Icons.schedule_outlined,
+            title:
+                '${row['startTime'] ?? ''}–${row['endTime'] ?? ''} · ${row['subjectName'] ?? 'Class'}',
+            subtitle:
+                '${row['className'] ?? ''} · ${row['sectionName'] ?? ''} · ${row['teacherName'] ?? 'Teacher not assigned'} · ${row['room'] ?? 'Room not set'}',
+            trailing:
+                '${timetableWeekdayLabel(int.tryParse(row['weekday']?.toString() ?? '') ?? 0)} · Period ${row['period'] ?? '—'}',
+            action: SchoolMeetingLinkButton(link: row['meetingLink']),
           ),
-    ],
+        ),
+    _sectionHeading('School calendar'),
+    if (_schoolCalendar.isEmpty)
+      const _InfoBanner(text: 'No school calendar events are synced yet.'),
+    ..._schoolCalendar.map((event) {
+      final endDate = event['endDate']?.toString();
+      final date =
+          endDate == null || endDate.isEmpty
+              ? '${event['startDate'] ?? ''}'
+              : '${event['startDate'] ?? ''} – $endDate';
+      final notes = event['notes']?.toString() ?? '';
+      return _recordCard(
+        icon:
+            event['eventType'] == 'closure'
+                ? Icons.event_busy_outlined
+                : event['eventType'] == 'holiday'
+                ? Icons.beach_access_outlined
+                : event['eventType'] == 'exam'
+                ? Icons.assignment_outlined
+                : Icons.event_outlined,
+        title: event['title']?.toString() ?? 'School event',
+        subtitle: [
+          calendarEventTypeLabel(event['eventType']),
+          if (notes.isNotEmpty) notes,
+        ].join(' · '),
+        trailing: date,
+      );
+    }),
   ];
+
+  List<Map<String, dynamic>> get _visibleTimetable {
+    return timetableEntriesForView(
+      _timetable,
+      weekly: _showWeeklyTimetable,
+      weekday: DateTime.now().weekday,
+    );
+  }
 
   List<Widget> _parentFees() => [
     _sectionHeading('Fee invoices and receipts'),
@@ -2351,7 +2919,7 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
           (row) => _recordCard(
             icon: Icons.assignment_outlined,
             title:
-                '${row['requestType'] ?? 'Request'} · ${row['studentName'] ?? 'Student'}',
+                '${_parentRequestTypeLabel(row['requestType'])} · ${row['studentName'] ?? 'Student'}',
             subtitle:
                 '${row['startsOn'] ?? ''}${row['endsOn'] == null ? '' : ' to ${row['endsOn']}'} · ${row['message'] ?? ''}',
             trailing: row['status']?.toString(),
@@ -2398,8 +2966,9 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
     String? subtitle,
     String? trailing,
     String? detail,
-  }) => Card(
-    child: ListTile(
+    Widget? action,
+  }) {
+    final tile = ListTile(
       leading: Icon(icon),
       title: Text(title),
       subtitle:
@@ -2436,8 +3005,17 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                   ],
                 ),
           ),
-    ),
-  );
+    );
+    return Card(
+      child:
+          action == null
+              ? tile
+              : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [tile, action],
+              ),
+    );
+  }
 
   Widget _queuedCommandCard(Map<String, Object?> row) {
     Map<String, dynamic> payload = {};
@@ -2449,7 +3027,7 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
     }
     final title =
         row['entity_type'] == 'parent_request'
-            ? '${payload['requestType'] ?? 'Request'} · ${payload['studentName'] ?? 'Linked student'}'
+            ? '${_parentRequestTypeLabel(payload['requestType'])} · ${payload['studentName'] ?? 'Linked student'}'
             : row['entity_type'] == 'exam_mark'
             ? 'Draft mark · student ${payload['studentId'] ?? ''}'
             : row['operation']?.toString() ?? 'Queued change';
@@ -2630,12 +3208,18 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                                       'leave',
                                       'profile_change',
                                       'document',
+                                      'data_access',
+                                      'data_correction',
+                                      'data_deletion',
+                                      'attendance_correction',
                                       'other',
                                     ]
                                     .map(
                                       (value) => DropdownMenuItem(
                                         value: value,
-                                        child: Text(value.replaceAll('_', ' ')),
+                                        child: Text(
+                                          _parentRequestTypeLabel(value),
+                                        ),
                                       ),
                                     )
                                     .toList(),
@@ -2644,39 +3228,89 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                                   () => type = value ?? 'other',
                                 ),
                           ),
-                          TextFormField(
-                            controller: startsOn,
-                            decoration: const InputDecoration(
-                              labelText: 'Starts on (YYYY-MM-DD, optional)',
+                          if (type.startsWith('data_'))
+                            const _InfoBanner(
+                              text:
+                                  'This is sent to the school for review. It does not automatically change or delete records. The school must check its record-retention rules before acting.',
                             ),
-                            validator:
-                                (value) => validateOptionalIsoDate(
-                                  value,
-                                  label: 'start date',
-                                ),
-                          ),
-                          TextFormField(
-                            controller: endsOn,
-                            decoration: const InputDecoration(
-                              labelText: 'Ends on (YYYY-MM-DD, optional)',
+                          if (type == 'attendance_correction')
+                            const _InfoBanner(
+                              text:
+                                  'This asks the school to review attendance for the selected date. It does not change the official attendance record automatically.',
                             ),
-                            validator:
-                                (value) =>
-                                    validateOptionalIsoDate(
-                                      value,
-                                      label: 'end date',
-                                    ) ??
-                                    validateOptionalRequestDateRange(
-                                      startsOn: startsOn.text,
-                                      endsOn: value,
-                                    ),
-                          ),
+                          if (type == 'leave') ...[
+                            TextFormField(
+                              controller: startsOn,
+                              decoration: const InputDecoration(
+                                labelText: 'Starts on (YYYY-MM-DD, optional)',
+                              ),
+                              validator:
+                                  (value) => validateOptionalIsoDate(
+                                    value,
+                                    label: 'start date',
+                                  ),
+                            ),
+                            TextFormField(
+                              controller: endsOn,
+                              decoration: const InputDecoration(
+                                labelText: 'Ends on (YYYY-MM-DD, optional)',
+                              ),
+                              validator:
+                                  (value) =>
+                                      validateOptionalIsoDate(
+                                        value,
+                                        label: 'end date',
+                                      ) ??
+                                      validateOptionalRequestDateRange(
+                                        startsOn: startsOn.text,
+                                        endsOn: value,
+                                      ),
+                            ),
+                          ] else if (type == 'attendance_correction') ...[
+                            TextFormField(
+                              controller: startsOn,
+                              readOnly: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Attendance date',
+                                hintText: 'Choose the date to review',
+                                suffixIcon: Icon(Icons.calendar_today_outlined),
+                              ),
+                              onTap: () async {
+                                final today = DateUtils.dateOnly(
+                                  DateTime.now(),
+                                );
+                                final existing = DateTime.tryParse(
+                                  startsOn.text,
+                                );
+                                final initial =
+                                    existing != null && !existing.isAfter(today)
+                                        ? existing
+                                        : today;
+                                final selected = await showDatePicker(
+                                  context: context,
+                                  initialDate: initial,
+                                  firstDate: DateTime(2000),
+                                  lastDate: today,
+                                );
+                                if (selected != null) {
+                                  startsOn.text = selected
+                                      .toIso8601String()
+                                      .substring(0, 10);
+                                  setDialogState(() {});
+                                }
+                              },
+                              validator: validateAttendanceCorrectionDate,
+                            ),
+                          ],
                           TextFormField(
                             controller: message,
                             minLines: 2,
                             maxLines: 4,
-                            decoration: const InputDecoration(
-                              labelText: 'Message',
+                            decoration: InputDecoration(
+                              labelText:
+                                  type.startsWith('data_')
+                                      ? 'Details for the school'
+                                      : 'Message',
                             ),
                             validator:
                                 (value) =>
@@ -2700,7 +3334,7 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                           'studentId': studentId,
                           'type': type,
                           'startsOn': startsOn.text.trim(),
-                          'endsOn': endsOn.text.trim(),
+                          'endsOn': type == 'leave' ? endsOn.text.trim() : '',
                           'message': message.text.trim(),
                         });
                       },
@@ -2963,6 +3597,21 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
           },
         ),
       const SizedBox(height: 8),
+      DropdownButtonFormField<int>(
+        initialValue: _attendancePeriod,
+        decoration: const InputDecoration(labelText: 'Attendance session'),
+        items: [
+          const DropdownMenuItem(value: 0, child: Text('Full day')),
+          for (var period = 1; period <= 15; period++)
+            DropdownMenuItem(value: period, child: Text('Period $period')),
+        ],
+        onChanged: (value) async {
+          if (value == null) return;
+          setState(() => _attendancePeriod = value);
+          await _reloadLocal();
+        },
+      ),
+      const SizedBox(height: 8),
       TextField(
         controller: _dateController,
         keyboardType: TextInputType.datetime,
@@ -2995,6 +3644,8 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
       ..._students.map((student) {
         final id = student['public_id']?.toString() ?? '';
         final current = _localAttendance(id);
+        final draftKey = _attendanceDraftKey(id, _attendancePeriod);
+        final selectedStatus = _draftStatuses[draftKey] ?? 'present';
         return Card(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -3019,19 +3670,31 @@ class _HubWorkspaceState extends State<_HubWorkspace> {
                   ),
                 ),
                 DropdownButton<String>(
-                  value: _draftStatuses[id] ?? 'present',
+                  value:
+                      _attendanceStatusOptions.any(
+                            (option) =>
+                                option['statusKey']?.toString() ==
+                                selectedStatus,
+                          )
+                          ? selectedStatus
+                          : _attendanceStatusOptions.first['statusKey']
+                              ?.toString(),
                   items:
-                      const ['present', 'absent', 'late', 'excused']
+                      _attendanceStatusOptions
                           .map(
-                            (value) => DropdownMenuItem(
-                              value: value,
-                              child: Text(value),
+                            (option) => DropdownMenuItem(
+                              value: option['statusKey']?.toString(),
+                              child: Text(
+                                option['label']?.toString() ??
+                                    option['statusKey']?.toString() ??
+                                    'Status',
+                              ),
                             ),
                           )
                           .toList(),
                   onChanged: (value) {
                     if (value != null)
-                      setState(() => _draftStatuses[id] = value);
+                      setState(() => _draftStatuses[draftKey] = value);
                   },
                 ),
                 IconButton(
@@ -3286,6 +3949,136 @@ String? _phoneValidator(String? value) {
       : 'Enter the phone number registered with the school.';
 }
 
+class _ParentLoginSupportDialog extends StatefulWidget {
+  const _ParentLoginSupportDialog({
+    required this.initialEmail,
+    required this.initialPhone,
+    required this.initialSchool,
+  });
+
+  final String initialEmail;
+  final String initialPhone;
+  final String initialSchool;
+
+  @override
+  State<_ParentLoginSupportDialog> createState() =>
+      _ParentLoginSupportDialogState();
+}
+
+class _ParentLoginSupportDialogState extends State<_ParentLoginSupportDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final _name = TextEditingController();
+  late final _email = TextEditingController(text: widget.initialEmail);
+  late final _phone = TextEditingController(text: widget.initialPhone);
+  late final _school = TextEditingController(text: widget.initialSchool);
+  final _subject = TextEditingController(text: 'I need help signing in');
+  final _message = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _phone.dispose();
+    _school.dispose();
+    _subject.dispose();
+    _message.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Parent sign-in help'),
+    content: SizedBox(
+      width: 460,
+      child: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _name,
+                maxLength: 120,
+                decoration: const InputDecoration(labelText: 'Your name'),
+                validator: _required,
+              ),
+              TextFormField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(labelText: 'Gmail account'),
+                validator: _emailValidator,
+              ),
+              TextFormField(
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Phone number'),
+                validator: _phoneValidator,
+              ),
+              TextFormField(
+                controller: _school,
+                maxLength: 160,
+                decoration: const InputDecoration(
+                  labelText: 'School name or ID (optional)',
+                ),
+              ),
+              TextFormField(
+                controller: _subject,
+                maxLength: 160,
+                decoration: const InputDecoration(labelText: 'Subject'),
+                validator:
+                    (value) =>
+                        (value?.trim().length ?? 0) < 4
+                            ? 'Enter at least 4 characters.'
+                            : null,
+              ),
+              TextFormField(
+                controller: _message,
+                minLines: 3,
+                maxLines: 6,
+                maxLength: 3000,
+                decoration: const InputDecoration(
+                  labelText: 'Describe the sign-in problem',
+                  alignLabelWithHint: true,
+                ),
+                validator:
+                    (value) =>
+                        (value?.trim().length ?? 0) < 10
+                            ? 'Please add at least 10 characters.'
+                            : null,
+              ),
+              const Text(
+                'This goes to the School ERP operator, who may need to verify your identity. Do not include passwords or sign-in codes. After signing in with the same email and phone, you can track it in Explore.',
+                style: TextStyle(fontSize: 12, color: Color(0xff6c7a8e)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        onPressed: () {
+          if (!(_formKey.currentState?.validate() ?? false)) return;
+          Navigator.pop(context, {
+            'name': _name.text.trim(),
+            'email': _email.text.trim(),
+            'phone': _phone.text.trim(),
+            'school': _school.text.trim(),
+            'subject': _subject.text.trim(),
+            'message': _message.text.trim(),
+          });
+        },
+        icon: const Icon(Icons.send_outlined),
+        label: const Text('Send to operator'),
+      ),
+    ],
+  );
+}
+
 class _LoginView extends StatefulWidget {
   const _LoginView({
     required this.role,
@@ -3298,6 +4091,7 @@ class _LoginView extends StatefulWidget {
     required this.serverUrl,
     required this.onConsentChanged,
     required this.onSubmit,
+    required this.onSubmitLoginSupport,
     required this.onChangeServer,
   });
   final MobileRole role;
@@ -3310,6 +4104,7 @@ class _LoginView extends StatefulWidget {
   final String serverUrl;
   final ValueChanged<bool> onConsentChanged;
   final ValueChanged<Map<String, String>> onSubmit;
+  final Future<void> Function(Map<String, String> values) onSubmitLoginSupport;
   final VoidCallback onChangeServer;
 
   @override
@@ -3338,6 +4133,19 @@ class _LoginViewState extends State<_LoginView> {
     _phone.dispose();
     _password.dispose();
     super.dispose();
+  }
+
+  Future<void> _requestLoginSupport() async {
+    final values = await showDialog<Map<String, String>>(
+      context: context,
+      builder:
+          (_) => _ParentLoginSupportDialog(
+            initialEmail: _email.text.trim(),
+            initialPhone: _phone.text.trim(),
+            initialSchool: _schoolId.text.trim(),
+          ),
+    );
+    if (values != null) await widget.onSubmitLoginSupport(values);
   }
 
   @override
@@ -3459,6 +4267,12 @@ class _LoginViewState extends State<_LoginView> {
                 onPressed: widget.onChangeServer,
                 child: const Text('Change school server'),
               ),
+              if (widget.role == MobileRole.parent && _selectedRole == 'parent')
+                TextButton.icon(
+                  onPressed: widget.working ? null : _requestLoginSupport,
+                  icon: const Icon(Icons.help_outline),
+                  label: const Text('Need help signing in?'),
+                ),
             ],
           ),
         ),
@@ -3614,211 +4428,512 @@ class _AdminViewState extends State<_AdminView> {
   );
 }
 
+class _ActiveSessionsButton extends StatelessWidget {
+  const _ActiveSessionsButton({required this.api, required this.onSignOut});
+
+  final ApiClient api;
+  final VoidCallback onSignOut;
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+    onPressed:
+        () => showDialog<void>(
+          context: context,
+          builder:
+              (context) =>
+                  _ActiveSessionsDialog(api: api, onSignOut: onSignOut),
+        ),
+    icon: const Icon(Icons.devices_outlined),
+    label: const Text('Manage signed-in devices'),
+  );
+}
+
+class _ActiveSessionsDialog extends StatefulWidget {
+  const _ActiveSessionsDialog({required this.api, required this.onSignOut});
+
+  final ApiClient api;
+  final VoidCallback onSignOut;
+
+  @override
+  State<_ActiveSessionsDialog> createState() => _ActiveSessionsDialogState();
+}
+
+class _ActiveSessionsDialogState extends State<_ActiveSessionsDialog> {
+  List<Map<String, dynamic>> _sessions = [];
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refresh());
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final sessions = await widget.api.activeSessions();
+      if (mounted) setState(() => _sessions = sessions);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () =>
+              _error =
+                  'Could not load signed-in devices. Try again when online.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _revoke(Map<String, dynamic> session) async {
+    setState(() => _busy = true);
+    try {
+      final result = await widget.api.revokeSession(session['id'].toString());
+      if (!mounted) return;
+      if (result['signedOut'] == true) {
+        Navigator.pop(context);
+        widget.onSignOut();
+        return;
+      }
+      await _refresh();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _revokeAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Sign out everywhere?'),
+            content: const Text(
+              'This will sign out every School ERP app session for this school account, including this phone.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Sign out all devices'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.revokeAllSessions();
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onSignOut();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _formatDate(Object? value) {
+    if (value == null || value.toString().isEmpty) return 'Not recorded';
+    final parsed = DateTime.tryParse(value.toString())?.toLocal();
+    if (parsed == null) return 'Not recorded';
+    final date =
+        '${parsed.day.toString().padLeft(2, '0')}/${parsed.month.toString().padLeft(2, '0')}/${parsed.year}';
+    final time =
+        '${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}';
+    return '$date · $time';
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Signed-in devices'),
+    content: SizedBox(
+      width: 480,
+      height:
+          _loading || _sessions.isEmpty
+              ? 180
+              : _sessions.length > 5
+              ? 420
+              : _sessions.length * 76 + 16,
+      child:
+          _loading
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: Color(0xffa12626)),
+                      ),
+                    ),
+                  if (_sessions.isEmpty && _error == null)
+                    const Text('No active sessions were returned.'),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children:
+                          _sessions
+                              .map(
+                                (session) => ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(
+                                    session['isCurrent'] == true
+                                        ? Icons.phone_android
+                                        : Icons.devices,
+                                  ),
+                                  title: Text(
+                                    session['deviceName']
+                                                ?.toString()
+                                                .trim()
+                                                .isNotEmpty ==
+                                            true
+                                        ? session['deviceName'].toString()
+                                        : 'School ERP app',
+                                  ),
+                                  subtitle: Text(
+                                    'Last active ${_formatDate(session['lastUsedAt'])} · Added ${_formatDate(session['createdAt'])}',
+                                  ),
+                                  trailing:
+                                      session['isCurrent'] == true
+                                          ? const Chip(
+                                            label: Text('This phone'),
+                                          )
+                                          : IconButton(
+                                            tooltip: 'Sign out this device',
+                                            onPressed:
+                                                _busy
+                                                    ? null
+                                                    : () => _revoke(session),
+                                            icon: const Icon(Icons.logout),
+                                          ),
+                                ),
+                              )
+                              .toList(),
+                    ),
+                  ),
+                ],
+              ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _loading || _busy ? null : _refresh,
+        child: const Text('Refresh'),
+      ),
+      TextButton(
+        onPressed: _busy ? null : () => Navigator.pop(context),
+        child: const Text('Close'),
+      ),
+      FilledButton.tonalIcon(
+        onPressed: _busy || _sessions.isEmpty ? null : _revokeAll,
+        icon: const Icon(Icons.logout),
+        label: const Text('Sign out all devices'),
+      ),
+    ],
+  );
+}
+
 class _HomeView extends StatelessWidget {
   const _HomeView({
     required this.role,
     required this.user,
+    required this.api,
     required this.hostedParent,
     required this.parentChildren,
     required this.parentCommands,
+    required this.parentSupportTickets,
+    required this.parentSupportAvailable,
+    required this.parentCacheCleared,
     required this.analyticsConsent,
+    required this.isOffline,
     this.success,
     this.error,
     required this.working,
     required this.showWelcomeCard,
     required this.onEnableNotifications,
+    required this.notificationPreferences,
+    required this.onNotificationPreferenceChanged,
+    required this.textScale,
+    required this.onTextScaleChanged,
     required this.onConsentChanged,
     required this.onRefreshHostedParent,
     required this.onSubmitHostedParentRequest,
+    required this.onSubmitHostedParentSupportTicket,
+    required this.onClearHostedParentCache,
     required this.onSignOut,
     required this.onChangeServer,
     required this.biometricEnabled,
     required this.onBiometricChanged,
+    required this.notificationRevision,
+    required this.notificationType,
+    required this.notificationOpened,
   });
   final MobileRole role;
   final Map<String, dynamic> user;
+  final ApiClient api;
   final bool hostedParent;
   final List<Map<String, dynamic>> parentChildren;
   final List<Map<String, dynamic>> parentCommands;
+  final List<Map<String, dynamic>> parentSupportTickets;
+  final bool parentSupportAvailable;
+  final bool parentCacheCleared;
   final bool analyticsConsent;
+  final bool isOffline;
   final String? success;
   final String? error;
   final bool working;
   final bool showWelcomeCard;
   final VoidCallback onEnableNotifications;
+  final Map<String, bool> notificationPreferences;
+  final void Function(String category, bool enabled)
+  onNotificationPreferenceChanged;
+  final double textScale;
+  final ValueChanged<double> onTextScaleChanged;
   final ValueChanged<bool> onConsentChanged;
   final VoidCallback onRefreshHostedParent;
   final ValueChanged<Map<String, String>> onSubmitHostedParentRequest;
+  final Future<void> Function(Map<String, String> values)
+  onSubmitHostedParentSupportTicket;
+  final Future<void> Function() onClearHostedParentCache;
   final VoidCallback onSignOut;
   final VoidCallback onChangeServer;
   final bool biometricEnabled;
   final ValueChanged<bool> onBiometricChanged;
+  final int notificationRevision;
+  final String? notificationType;
+  final bool notificationOpened;
 
   @override
-  Widget build(BuildContext context) => _Page(
-    role: role,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (showWelcomeCard) ...[
-          Text(
-            'Hello, ${user['name'] ?? role.title}',
-            style: const TextStyle(
-              fontSize: 25,
-              height: 1.2,
-              fontWeight: FontWeight.w700,
-              color: Color(0xff122238),
-            ),
-          ),
-          const SizedBox(height: 5),
-          Text(role.welcome, style: const TextStyle(color: Color(0xff68778b))),
-          const SizedBox(height: 16),
-        ],
-        if (error != null) _MessageBanner(text: error!, error: true),
-        if (success != null) _MessageBanner(text: success!, error: false),
-        if (hostedParent) ...[
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Use phone biometrics'),
-            subtitle: const Text(
-              'Unlock this saved session on this phone. School access is still checked by the server.',
-            ),
-            value: biometricEnabled,
-            onChanged: onBiometricChanged,
-          ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              onPressed: working ? null : onRefreshHostedParent,
-              icon: const Icon(Icons.sync),
-              label: const Text('Refresh school information'),
-            ),
-          ),
-          if (parentChildren.isEmpty)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(17),
-                child: Text(
-                  'No child has been linked to this account yet. Ask the school office to connect your parent account to your child.',
-                  style: TextStyle(color: Color(0xff69788d), height: 1.45),
-                ),
+  Widget build(BuildContext context) {
+    if (hostedParent) {
+      return HostedParentNavigation(
+        role: role,
+        user: user,
+        api: api,
+        children: parentChildren,
+        commands: parentCommands,
+        supportTickets: parentSupportTickets,
+        supportAvailable: parentSupportAvailable,
+        cacheCleared: parentCacheCleared,
+        analyticsConsent: analyticsConsent,
+        isOffline: isOffline,
+        success: success,
+        error: error,
+        working: working,
+        showWelcomeCard: showWelcomeCard,
+        onEnableNotifications: onEnableNotifications,
+        notificationPreferences: notificationPreferences,
+        onNotificationPreferenceChanged: onNotificationPreferenceChanged,
+        textScale: textScale,
+        onTextScaleChanged: onTextScaleChanged,
+        onConsentChanged: onConsentChanged,
+        onRefresh: onRefreshHostedParent,
+        onSubmitRequest: onSubmitHostedParentRequest,
+        onSubmitSupportTicket: onSubmitHostedParentSupportTicket,
+        onClearCache: onClearHostedParentCache,
+        onSignOut: onSignOut,
+        onChangeServer: onChangeServer,
+        biometricEnabled: biometricEnabled,
+        onBiometricChanged: onBiometricChanged,
+        notificationRevision: notificationRevision,
+        notificationType: notificationType,
+        notificationOpened: notificationOpened,
+      );
+    }
+
+    return _Page(
+      role: role,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (showWelcomeCard) ...[
+            Text(
+              'Hello, ${user['name'] ?? role.title}',
+              style: const TextStyle(
+                fontSize: 25,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: Color(0xff122238),
               ),
             ),
-          ...parentChildren.map((child) => _hostedChildCard(context, child)),
-          if (parentCommands.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Text(
-              'Your requests',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            const SizedBox(height: 5),
+            Text(
+              role.welcome,
+              style: const TextStyle(color: Color(0xff68778b)),
             ),
-            ...parentCommands.map(
-              (command) => Card(
-                child: ListTile(
-                  leading: const Icon(Icons.outbox_outlined),
-                  title: Text(
-                    command['status'] == 'queued' ||
-                            command['status'] == 'delivered'
-                        ? 'Waiting for the school to sync'
-                        : (command['message']?.toString().isNotEmpty == true
-                            ? command['message'].toString()
-                            : command['status'].toString()),
-                  ),
-                  subtitle: Text('Request ${command['operationId'] ?? ''}'),
-                  trailing: Text(command['status']?.toString() ?? 'queued'),
-                ),
-              ),
-            ),
+            const SizedBox(height: 16),
           ],
-        ] else ...[
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(17),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'School Hub connection',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                  ),
-                  const SizedBox(height: 7),
-                  const Text(
-                    'No local School Hub is paired to this phone. Pair on the school network with a one-time code from the Hub administrator.',
+          if (error != null) _MessageBanner(text: error!, error: true),
+          if (success != null) _MessageBanner(text: success!, error: false),
+          _ActiveSessionsButton(api: api, onSignOut: onSignOut),
+          if (hostedParent) ...[
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Use phone biometrics'),
+              subtitle: const Text(
+                'Unlock this saved session on this phone. School access is still checked by the server.',
+              ),
+              value: biometricEnabled,
+              onChanged: onBiometricChanged,
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: working ? null : onRefreshHostedParent,
+                icon: const Icon(Icons.sync),
+                label: const Text('Refresh school information'),
+              ),
+            ),
+            if (parentChildren.isEmpty)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(17),
+                  child: Text(
+                    'No child has been linked to this account yet. Ask the school office to connect your parent account to your child.',
                     style: TextStyle(color: Color(0xff69788d), height: 1.45),
                   ),
-                  const SizedBox(height: 10),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.sync_problem_outlined,
-                        size: 17,
-                        color: Color(0xff9b671c),
-                      ),
-                      SizedBox(width: 7),
-                      Text(
-                        'Last synced: not connected',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                          color: Color(0xff7b5b2d),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 13),
-          ...role.areas.map(
-            (area) => Padding(
-              padding: const EdgeInsets.only(bottom: 9),
-              child: Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: const Color(0xffedf3ff),
-                    child: Icon(_iconFor(area), color: const Color(0xff2467ed)),
+            ...parentChildren.map((child) => _hostedChildCard(context, child)),
+            if (parentCommands.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Your requests',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              ...parentCommands.map(
+                (command) => Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.outbox_outlined),
+                    title: Text(
+                      command['status'] == 'queued' ||
+                              command['status'] == 'delivered'
+                          ? 'Waiting for the school to sync'
+                          : (command['message']?.toString().isNotEmpty == true
+                              ? command['message'].toString()
+                              : command['status'].toString()),
+                    ),
+                    subtitle: Text('Request ${command['operationId'] ?? ''}'),
+                    trailing: Text(command['status']?.toString() ?? 'queued'),
                   ),
-                  title: Text(
-                    area,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: const Text(
-                    'Available after your school connects its Hub',
-                  ),
-                  trailing: const Icon(Icons.lock_outline, size: 18),
+                ),
+              ),
+            ],
+          ] else ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(17),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'School Hub connection',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    const Text(
+                      'No local School Hub is paired to this phone. Pair on the school network with a one-time code from the Hub administrator.',
+                      style: TextStyle(color: Color(0xff69788d), height: 1.45),
+                    ),
+                    const SizedBox(height: 10),
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.sync_problem_outlined,
+                          size: 17,
+                          color: Color(0xff9b671c),
+                        ),
+                        SizedBox(width: 7),
+                        Text(
+                          'Last synced: not connected',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: Color(0xff7b5b2d),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
-          ),
-        ],
-        const SizedBox(height: 5),
-        _PrimaryButton(
-          label: 'Enable notifications',
-          working: working,
-          icon: Icons.notifications_active_outlined,
-          onPressed: onEnableNotifications,
-        ),
-        const SizedBox(height: 10),
-        _ConsentRow(value: analyticsConsent, onChanged: onConsentChanged),
-        const Divider(height: 28),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                user['email']?.toString() ?? '',
-                style: const TextStyle(fontSize: 12, color: Color(0xff6c7a8e)),
+            const SizedBox(height: 13),
+            ...role.areas.map(
+              (area) => Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(0xffedf3ff),
+                      child: Icon(
+                        _iconFor(area),
+                        color: const Color(0xff2467ed),
+                      ),
+                    ),
+                    title: Text(
+                      area,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Available after your school connects its Hub',
+                    ),
+                    trailing: const Icon(Icons.lock_outline, size: 18),
+                  ),
+                ),
               ),
             ),
-            TextButton(onPressed: onSignOut, child: const Text('Sign out')),
           ],
-        ),
-        TextButton(
-          onPressed: onChangeServer,
-          child: const Text('Change school server'),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 5),
+          _PrimaryButton(
+            label: 'Enable notifications',
+            working: working,
+            icon: Icons.notifications_active_outlined,
+            onPressed: onEnableNotifications,
+          ),
+          const SizedBox(height: 10),
+          _ConsentRow(value: analyticsConsent, onChanged: onConsentChanged),
+          const Divider(height: 28),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  user['email']?.toString() ?? '',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xff6c7a8e),
+                  ),
+                ),
+              ),
+              TextButton(onPressed: onSignOut, child: const Text('Sign out')),
+            ],
+          ),
+          TextButton(
+            onPressed: onChangeServer,
+            child: const Text('Change school server'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _hostedChildCard(BuildContext context, Map<String, dynamic> child) {
     final snapshot = Map<String, dynamic>.from(child['snapshot'] as Map? ?? {});
@@ -3847,6 +4962,10 @@ class _HomeView extends StatelessWidget {
             Text(
               '${student['className'] ?? ''} ${student['sectionName'] ?? ''} · ${student['admissionNo'] ?? ''}',
               style: const TextStyle(color: Color(0xff68778b)),
+            ),
+            Text(
+              '${child['schoolName'] ?? 'School'} · ${child['linkStatus'] ?? 'Linked'}',
+              style: const TextStyle(fontSize: 12, color: Color(0xff68778b)),
             ),
             const SizedBox(height: 4),
             Text(
@@ -3964,6 +5083,1209 @@ class _HomeView extends StatelessWidget {
           .toList();
 }
 
+class HostedParentNavigation extends StatefulWidget {
+  const HostedParentNavigation({
+    required this.role,
+    required this.user,
+    required this.api,
+    required this.children,
+    required this.commands,
+    required this.supportTickets,
+    required this.supportAvailable,
+    required this.cacheCleared,
+    required this.analyticsConsent,
+    required this.isOffline,
+    required this.working,
+    required this.showWelcomeCard,
+    required this.onEnableNotifications,
+    required this.notificationPreferences,
+    required this.onNotificationPreferenceChanged,
+    required this.textScale,
+    required this.onTextScaleChanged,
+    required this.onConsentChanged,
+    required this.onRefresh,
+    required this.onSubmitRequest,
+    required this.onSubmitSupportTicket,
+    required this.onClearCache,
+    required this.onSignOut,
+    required this.onChangeServer,
+    required this.biometricEnabled,
+    required this.onBiometricChanged,
+    required this.notificationRevision,
+    required this.notificationType,
+    required this.notificationOpened,
+    this.success,
+    this.error,
+  });
+
+  final MobileRole role;
+  final Map<String, dynamic> user;
+  final ApiClient api;
+  final List<Map<String, dynamic>> children;
+  final List<Map<String, dynamic>> commands;
+  final List<Map<String, dynamic>> supportTickets;
+  final bool supportAvailable;
+  final bool cacheCleared;
+  final bool analyticsConsent;
+  final bool isOffline;
+  final bool working;
+  final bool showWelcomeCard;
+  final VoidCallback onEnableNotifications;
+  final Map<String, bool> notificationPreferences;
+  final void Function(String category, bool enabled)
+  onNotificationPreferenceChanged;
+  final double textScale;
+  final ValueChanged<double> onTextScaleChanged;
+  final ValueChanged<bool> onConsentChanged;
+  final VoidCallback onRefresh;
+  final ValueChanged<Map<String, String>> onSubmitRequest;
+  final Future<void> Function(Map<String, String> values) onSubmitSupportTicket;
+  final Future<void> Function() onClearCache;
+  final VoidCallback onSignOut;
+  final VoidCallback onChangeServer;
+  final bool biometricEnabled;
+  final ValueChanged<bool> onBiometricChanged;
+  final int notificationRevision;
+  final String? notificationType;
+  final bool notificationOpened;
+  final String? success;
+  final String? error;
+
+  @override
+  State<HostedParentNavigation> createState() => _HostedParentNavigationState();
+}
+
+class _HostedParentNavigationState extends State<HostedParentNavigation> {
+  int _selectedIndex = 0;
+  late int _handledNotificationRevision;
+  bool _showWeeklyTimetable = false;
+  String? _selectedChildId;
+  DateTimeRange? _attendanceDateRange;
+
+  @override
+  void initState() {
+    super.initState();
+    _handledNotificationRevision = widget.notificationRevision;
+  }
+
+  @override
+  void didUpdateWidget(covariant HostedParentNavigation oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.notificationRevision != _handledNotificationRevision) {
+      _handledNotificationRevision = widget.notificationRevision;
+      if (widget.notificationOpened) {
+        _selectedIndex = switch (widget.notificationType) {
+          'schedule_update' => 1,
+          'homework_update' => 1,
+          'school_notice' => 2,
+          _ => _selectedIndex,
+        };
+      }
+    }
+    if (_selectedChildId != null &&
+        !widget.children.any(
+          (child) => child['studentPublicId']?.toString() == _selectedChildId,
+        )) {
+      _selectedChildId = null;
+    }
+  }
+
+  List<Map<String, dynamic>> get _visibleChildren {
+    final selectedId = _selectedChildId;
+    if (selectedId == null) return widget.children;
+    return widget.children
+        .where((child) => child['studentPublicId']?.toString() == selectedId)
+        .toList();
+  }
+
+  Map<String, dynamic> _student(Map<String, dynamic> child) =>
+      Map<String, dynamic>.from(
+        (Map<String, dynamic>.from(child['snapshot'] as Map? ?? {}))['student']
+                as Map? ??
+            {},
+      );
+
+  List<Map<String, dynamic>> _rows(Map<String, dynamic> child, String key) =>
+      (Map<String, dynamic>.from(child['snapshot'] as Map? ?? {})[key]
+                  as List? ??
+              [])
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+
+  List<Map<String, dynamic>> _visibleTimetable(Map<String, dynamic> child) {
+    return timetableEntriesForView(
+      _rows(child, 'timetable'),
+      weekly: _showWeeklyTimetable,
+      weekday: DateTime.now().weekday,
+    );
+  }
+
+  List<Map<String, dynamic>> _familyCalendarEvents() {
+    final selectedChild = widget.children.where(
+      (child) => child['studentPublicId']?.toString() == _selectedChildId,
+    );
+    final selectedSchoolId =
+        selectedChild.isEmpty
+            ? null
+            : selectedChild.first['schoolId']?.toString();
+    final unique = <String, Map<String, dynamic>>{};
+    for (final child in widget.children) {
+      for (final event
+          in (child['schoolCalendar'] as List? ?? []).whereType<Map>()) {
+        final value = Map<String, dynamic>.from(event);
+        final schoolId = value['schoolId']?.toString() ?? '';
+        if (selectedSchoolId != null && schoolId != selectedSchoolId) continue;
+        final key =
+            '$schoolId:${value['id'] ?? value['title']}:${value['startDate']}';
+        unique.putIfAbsent(key, () => value);
+      }
+    }
+    final events =
+        unique.values.toList()..sort((left, right) {
+          final date = (left['startDate']?.toString() ?? '').compareTo(
+            right['startDate']?.toString() ?? '',
+          );
+          return date != 0
+              ? date
+              : (left['schoolName']?.toString() ?? '').compareTo(
+                right['schoolName']?.toString() ?? '',
+              );
+        });
+    return events;
+  }
+
+  List<Widget> _familyCalendarSection() {
+    final events = _familyCalendarEvents();
+    final selectedChild = widget.children.where(
+      (child) => child['studentPublicId']?.toString() == _selectedChildId,
+    );
+    final selectedSchoolChild =
+        selectedChild.isEmpty
+            ? null
+            : widget.children.cast<Map<String, dynamic>>().firstWhere(
+              (child) =>
+                  child['schoolId']?.toString() ==
+                  selectedChild.first['schoolId']?.toString(),
+              orElse: () => selectedChild.first,
+            );
+    final lastUpdated = selectedSchoolChild?['schoolCalendarProjectedAt'];
+    return [
+      _sectionHeading('Family calendar'),
+      if (events.isEmpty)
+        const _InfoBanner(text: 'No school calendar events are synced yet.'),
+      ...events.map((event) {
+        final endDate = event['endDate']?.toString();
+        final date =
+            endDate == null || endDate.isEmpty
+                ? '${event['startDate'] ?? ''}'
+                : '${event['startDate'] ?? ''} – $endDate';
+        final notes = event['notes']?.toString() ?? '';
+        final title = event['title']?.toString() ?? 'School event';
+        final subtitle = [
+          event['schoolName']?.toString() ?? 'School',
+          calendarEventTypeLabel(event['eventType']),
+          if (notes.isNotEmpty) notes,
+        ].join(' · ');
+        return Card(
+          child: ListTile(
+            leading: Icon(
+              event['eventType'] == 'closure'
+                  ? Icons.event_busy_outlined
+                  : event['eventType'] == 'holiday'
+                  ? Icons.beach_access_outlined
+                  : event['eventType'] == 'exam'
+                  ? Icons.assignment_outlined
+                  : Icons.event_outlined,
+            ),
+            title: Text(title),
+            subtitle: Text(subtitle),
+            trailing: Text(date, style: const TextStyle(fontSize: 11)),
+            onTap: () => _showRecordDetail(context, title, '$date\n$subtitle'),
+          ),
+        );
+      }),
+      if (lastUpdated != null)
+        Text(
+          'Calendar synced ${_syncLabel(lastUpdated)}',
+          style: const TextStyle(fontSize: 11, color: Color(0xff68778b)),
+        ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: _Page(
+      role: widget.role,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.showWelcomeCard) ...[
+            Text(
+              'Hello, ${widget.user['name'] ?? widget.role.title}',
+              style: const TextStyle(
+                fontSize: 25,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: Color(0xff122238),
+              ),
+            ),
+            const SizedBox(height: 5),
+            const Text(
+              'Your family’s school updates, together.',
+              style: TextStyle(color: Color(0xff68778b)),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (widget.error != null)
+            _MessageBanner(text: widget.error!, error: true),
+          if (widget.success != null)
+            _MessageBanner(text: widget.success!, error: false),
+          if (widget.isOffline)
+            const _MessageBanner(
+              text: 'Offline · showing the last saved school information.',
+              error: false,
+            ),
+          _ActiveSessionsButton(api: widget.api, onSignOut: widget.onSignOut),
+          if (_selectedIndex >= 1 && _selectedIndex <= 3) ...[
+            const SizedBox(height: 8),
+            _childSelector(),
+          ],
+          const SizedBox(height: 12),
+          ..._tabContent(context),
+        ],
+      ),
+    ),
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: _selectedIndex,
+      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+      destinations: const [
+        NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+        NavigationDestination(
+          icon: Icon(Icons.menu_book_outlined),
+          label: 'Learning',
+        ),
+        NavigationDestination(icon: Icon(Icons.inbox_outlined), label: 'Inbox'),
+        NavigationDestination(
+          icon: Icon(Icons.payments_outlined),
+          label: 'Payments',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.explore_outlined),
+          label: 'Explore',
+        ),
+      ],
+    ),
+  );
+
+  Widget _childSelector() => DropdownButtonFormField<String?>(
+    initialValue: _selectedChildId,
+    isExpanded: true,
+    decoration: const InputDecoration(labelText: 'Showing information for'),
+    items: [
+      const DropdownMenuItem<String?>(value: null, child: Text('All children')),
+      ...widget.children.map((child) {
+        final student = _student(child);
+        return DropdownMenuItem<String?>(
+          value: child['studentPublicId']?.toString(),
+          child: Text(
+            '${student['fullName'] ?? 'Child'} · ${child['schoolName'] ?? 'School'} · ${student['className'] ?? ''} ${student['sectionName'] ?? ''}',
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
+      }),
+    ],
+    onChanged: (value) => setState(() => _selectedChildId = value),
+  );
+
+  List<Widget> _tabContent(BuildContext context) {
+    if (widget.children.isEmpty) {
+      return [
+        Card(
+          child: Padding(
+            padding: EdgeInsets.all(17),
+            child: Text(
+              widget.cacheCleared
+                  ? 'The saved school information was removed from this phone. Refresh when you want to download it again.'
+                  : 'No child is linked to this account yet. Ask the school office to connect your parent account.',
+              style: const TextStyle(color: Color(0xff69788d), height: 1.45),
+            ),
+          ),
+        ),
+        if (widget.cacheCleared && _selectedIndex == 0)
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.tonalIcon(
+              onPressed: widget.working ? null : widget.onRefresh,
+              icon: const Icon(Icons.sync),
+              label: const Text('Download school information'),
+            ),
+          ),
+        if (_selectedIndex == 4) ..._exploreContent(context),
+      ];
+    }
+
+    return switch (_selectedIndex) {
+      0 => _homeContent(context),
+      1 => _learningContent(context),
+      2 => _inboxContent(context),
+      3 => _paymentsContent(context),
+      _ => _exploreContent(context),
+    };
+  }
+
+  List<Widget> _homeContent(BuildContext context) => [
+    _sectionHeading('Your children'),
+    for (final child in widget.children) _homeChildCard(context, child),
+    if (widget.commands.isNotEmpty) ...[
+      const SizedBox(height: 8),
+      _sectionHeading('Recent requests'),
+      ...widget.commands.take(3).map(_requestCard),
+    ],
+    Align(
+      alignment: Alignment.centerRight,
+      child: TextButton.icon(
+        onPressed: widget.working ? null : widget.onRefresh,
+        icon: const Icon(Icons.sync),
+        label: const Text('Refresh school information'),
+      ),
+    ),
+  ];
+
+  Widget _homeChildCard(BuildContext context, Map<String, dynamic> child) {
+    final student = _student(child);
+    final scheduleOnly = child['accessLevel'] == 'schedule_only';
+    final attendance = _rows(child, 'attendance');
+    final homework = _rows(child, 'homework');
+    final results = _rows(child, 'results');
+    final fees = _rows(child, 'fees');
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap:
+                  () => setState(() {
+                    _selectedChildId = child['studentPublicId']?.toString();
+                    _selectedIndex = 1;
+                  }),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      student['fullName']?.toString() ?? 'Linked child',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${child['schoolName'] ?? 'School'} · ${student['className'] ?? ''} ${student['sectionName'] ?? ''}',
+                      style: const TextStyle(color: Color(0xff68778b)),
+                    ),
+                    if (scheduleOnly) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Schedule-only access · timetable details only',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xff476eaa),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    if (!scheduleOnly)
+                      Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: [
+                          _ParentCount(
+                            label: 'Attendance',
+                            count: attendance.length,
+                          ),
+                          _ParentCount(
+                            label: 'Homework',
+                            count: homework.length,
+                          ),
+                          _ParentCount(label: 'Results', count: results.length),
+                          _ParentCount(
+                            label: 'Fee records',
+                            count: fees.length,
+                          ),
+                        ],
+                      ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _syncLabel(child['projectedAt']),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xff68778b),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (!scheduleOnly)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed:
+                      widget.working
+                          ? null
+                          : () => _requestLeave(context, child),
+                  icon: const Icon(Icons.edit_calendar_outlined),
+                  label: const Text('Request leave'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _learningContent(BuildContext context) => [
+    ..._familyCalendarSection(),
+    const SizedBox(height: 8),
+    const Text('Timetable view', style: TextStyle(fontWeight: FontWeight.w700)),
+    const SizedBox(height: 6),
+    SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment<bool>(value: false, label: Text('Today')),
+        ButtonSegment<bool>(value: true, label: Text('Week')),
+      ],
+      selected: {_showWeeklyTimetable},
+      onSelectionChanged:
+          (selection) => setState(() => _showWeeklyTimetable = selection.first),
+    ),
+    for (final child in _visibleChildren) ...[
+      _childHeading(child),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          'School schedule · ${_syncLabel(child['projectedAt'])}',
+          style: const TextStyle(fontSize: 12, color: Color(0xff68778b)),
+        ),
+      ),
+      if (child['accessLevel'] != 'schedule_only')
+        ..._parentAttendanceSection(child),
+      ..._recordSection(
+        context,
+        'Timetable',
+        _visibleTimetable(child),
+        (row) =>
+            '${row['startTime'] ?? '—'}–${row['endTime'] ?? '—'} · ${row['subjectName'] ?? 'Class'}',
+        (row) =>
+            '${row['className'] ?? ''} ${row['sectionName'] ?? ''} · ${row['teacherName'] ?? 'Teacher not assigned'} · ${row['room'] ?? 'Room not set'}',
+        action: (row) => SchoolMeetingLinkButton(link: row['meetingLink']),
+      ),
+      if (child['accessLevel'] != 'schedule_only') ...[
+        ..._recordSection(
+          context,
+          'Homework',
+          _rows(child, 'homework'),
+          (row) => row['title']?.toString() ?? 'Homework',
+          (row) =>
+              '${row['subjectName'] ?? 'Classwork'} · Due ${row['dueOn'] ?? 'not set'}',
+          detail: (row) => row['details']?.toString() ?? '',
+        ),
+        ..._recordSection(
+          context,
+          'Published results',
+          _rows(child, 'results'),
+          (row) =>
+              '${row['examTitle'] ?? 'Exam'} · ${row['subjectName'] ?? ''}',
+          (row) =>
+              '${row['marksAwarded'] ?? '—'} / ${row['maxMarks'] ?? '—'} · ${row['examDate'] ?? ''}',
+        ),
+      ],
+    ],
+  ];
+
+  List<Widget> _parentAttendanceSection(Map<String, dynamic> child) {
+    final attendance = _rows(child, 'attendance')..sort((a, b) {
+      final dateOrder = (b['date']?.toString() ?? '').compareTo(
+        a['date']?.toString() ?? '',
+      );
+      if (dateOrder != 0) return dateOrder;
+      final aPeriod = int.tryParse(a['period']?.toString() ?? '') ?? 0;
+      final bPeriod = int.tryParse(b['period']?.toString() ?? '') ?? 0;
+      return aPeriod.compareTo(bPeriod);
+    });
+    final range = _attendanceDateRange;
+    final filtered =
+        attendance.where((row) {
+          if (range == null) return true;
+          final date = DateTime.tryParse(row['date']?.toString() ?? '');
+          if (date == null) return false;
+          final day = DateTime(date.year, date.month, date.day);
+          final start = DateTime(
+            range.start.year,
+            range.start.month,
+            range.start.day,
+          );
+          final end = DateTime(range.end.year, range.end.month, range.end.day);
+          return !day.isBefore(start) && !day.isAfter(end);
+        }).toList();
+    final rangeLabel =
+        range == null
+            ? 'All available dates'
+            : '${_attendanceDateLabel(range.start)} – ${_attendanceDateLabel(range.end)}';
+    return [
+      const SizedBox(height: 8),
+      _sectionHeading('Attendance'),
+      Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          Text(rangeLabel, style: const TextStyle(color: Color(0xff68778b))),
+          TextButton.icon(
+            onPressed: () async {
+              final today = DateTime.now();
+              final selected = await showDateRangePicker(
+                context: context,
+                firstDate: DateTime(2000),
+                lastDate: today,
+                initialDateRange: range,
+              );
+              if (selected != null && mounted) {
+                setState(() => _attendanceDateRange = selected);
+              }
+            },
+            icon: const Icon(Icons.date_range_outlined),
+            label: const Text('Filter dates'),
+          ),
+          if (range != null)
+            TextButton(
+              onPressed: () => setState(() => _attendanceDateRange = null),
+              child: const Text('Clear'),
+            ),
+        ],
+      ),
+      if (filtered.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Text(
+            'No attendance records in this date range.',
+            style: TextStyle(color: Color(0xff68778b)),
+          ),
+        )
+      else
+        ...filtered.map(
+          (row) => Card(
+            child: ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: Text(
+                _attendanceDateLabel(
+                  DateTime.tryParse(row['date']?.toString() ?? ''),
+                ),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Status: ${_attendanceStatusLabel(row['statusLabel']?.toString().isNotEmpty == true ? row['statusLabel'].toString() : row['status']?.toString() ?? '')}'
+                    ' · ${_attendanceSessionLabel(row['period'])}',
+                  ),
+                  if (row['updatedAt'] != null)
+                    Text(
+                      _syncLabel(row['updatedAt']),
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                ],
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap:
+                  () => _showRecordDetail(
+                    context,
+                    'Attendance',
+                    [
+                      'Date: ${_attendanceDateLabel(DateTime.tryParse(row['date']?.toString() ?? ''))}',
+                      'Status: ${_attendanceStatusLabel(row['statusLabel']?.toString().isNotEmpty == true ? row['statusLabel'].toString() : row['status']?.toString() ?? '')}',
+                      'Session: ${_attendanceSessionLabel(row['period'])}',
+                      if (row['reason']?.toString().isNotEmpty == true)
+                        'Note: ${row['reason']}',
+                      if (row['updatedAt'] != null)
+                        _syncLabel(row['updatedAt']),
+                      'Shared by the school; this view does not change attendance.',
+                    ].join('\n\n'),
+                  ),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  String _attendanceDateLabel(DateTime? date) {
+    if (date == null) return 'Date unavailable';
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  String _attendanceStatusLabel(String status) => switch (status) {
+    'present' => 'Present',
+    'absent' => 'Absent',
+    'late' => 'Late',
+    'excused' => 'Excused',
+    'early_departure' => 'Left early',
+    _ => status.isEmpty ? 'Unknown' : status,
+  };
+
+  String _attendanceSessionLabel(Object? value) {
+    final period = int.tryParse(value?.toString() ?? '') ?? 0;
+    return period == 0 ? 'Full day' : 'Period $period';
+  }
+
+  List<Widget> _inboxContent(BuildContext context) => [
+    for (final child in _visibleChildren.where(
+      (child) => child['accessLevel'] != 'schedule_only',
+    )) ...[
+      _childHeading(child),
+      ..._recordSection(
+        context,
+        'School notices',
+        _rows(child, 'announcements'),
+        (row) => row['title']?.toString() ?? 'School notice',
+        (row) => row['publishOn']?.toString() ?? '',
+        detail: (row) => row['message']?.toString() ?? '',
+      ),
+    ],
+    if (widget.commands.isNotEmpty) ...[
+      const SizedBox(height: 12),
+      _sectionHeading('Your requests'),
+      ...widget.commands.map(_requestCard),
+    ],
+  ];
+
+  List<Widget> _paymentsContent(BuildContext context) => [
+    const _InfoBanner(
+      text:
+          'These are school fee records. The school is the payee; contact the school office about fee balances or reconciliation.',
+    ),
+    for (final child in _visibleChildren.where(
+      (child) => child['accessLevel'] != 'schedule_only',
+    )) ...[
+      _childHeading(child),
+      ..._recordSection(
+        context,
+        'Fee records',
+        _rows(child, 'fees'),
+        (row) =>
+            row['feeName']?.toString() ?? row['period']?.toString() ?? 'Fee',
+        (row) => [
+          if (row['amount'] != null) 'Amount ₹${row['amount']}',
+          if (row['paidAmount'] != null) 'Paid ₹${row['paidAmount']}',
+          if (row['status'] != null) row['status'].toString(),
+          if (row['dueOn'] != null) 'Due ${row['dueOn']}',
+        ].join(' · '),
+      ),
+    ],
+  ];
+
+  List<Widget> _exploreContent(BuildContext context) => [
+    _sectionHeading('Account and preferences'),
+    Text('Text size · ${(widget.textScale * 100).round()}%'),
+    Slider.adaptive(
+      min: 0.85,
+      max: 1.5,
+      divisions: 13,
+      value: widget.textScale.clamp(0.85, 1.5),
+      label: '${(widget.textScale * 100).round()}%',
+      semanticFormatterCallback: (value) => '${(value * 100).round()} percent',
+      onChanged: widget.onTextScaleChanged,
+    ),
+    SwitchListTile.adaptive(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Use phone biometrics'),
+      subtitle: const Text(
+        'Unlock this saved session on this phone. The server still checks school access.',
+      ),
+      value: widget.biometricEnabled,
+      onChanged: widget.onBiometricChanged,
+    ),
+    _PrimaryButton(
+      label: 'Enable notifications',
+      working: widget.working,
+      icon: Icons.notifications_active_outlined,
+      onPressed: widget.onEnableNotifications,
+    ),
+    const SizedBox(height: 8),
+    const Text(
+      'Choose which school updates may send a push alert. School records remain available in the app.',
+      style: TextStyle(fontSize: 13, color: Color(0xff6c7a8e)),
+    ),
+    SwitchListTile.adaptive(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('School announcements'),
+      value: widget.notificationPreferences['school_notice'] ?? true,
+      onChanged:
+          widget.working
+              ? null
+              : (enabled) => widget.onNotificationPreferenceChanged(
+                'school_notice',
+                enabled,
+              ),
+    ),
+    SwitchListTile.adaptive(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Timetable and calendar updates'),
+      value: widget.notificationPreferences['schedule_update'] ?? true,
+      onChanged:
+          widget.working
+              ? null
+              : (enabled) => widget.onNotificationPreferenceChanged(
+                'schedule_update',
+                enabled,
+              ),
+    ),
+    SwitchListTile.adaptive(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('New homework'),
+      value: widget.notificationPreferences['homework_update'] ?? true,
+      onChanged:
+          widget.working
+              ? null
+              : (enabled) => widget.onNotificationPreferenceChanged(
+                'homework_update',
+                enabled,
+              ),
+    ),
+    const SizedBox(height: 8),
+    _ConsentRow(
+      value: widget.analyticsConsent,
+      onChanged: widget.onConsentChanged,
+    ),
+    ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.privacy_tip_outlined),
+      title: const Text('Privacy and data'),
+      subtitle: const Text('How school records, backups and diagnostics work'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap:
+          () => Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder:
+                  (_) => _ParentPrivacyPage(
+                    diagnosticsEnabled: widget.analyticsConsent,
+                  ),
+            ),
+          ),
+    ),
+    ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.delete_outline),
+      title: const Text('Remove saved school information'),
+      subtitle: const Text(
+        'Remove the offline copy from this phone. School records and queued requests stay unchanged.',
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: widget.working ? null : () => _confirmClearCache(context),
+    ),
+    const SizedBox(height: 10),
+    _sectionHeading('Help and support'),
+    const Text(
+      'Send a request to the School ERP operator about account access, child links, records, fees, backups, ads or purchases. The operator can route it to your school or platform team. Follow its status here.',
+      style: TextStyle(fontSize: 13, color: Color(0xff6c7a8e), height: 1.4),
+    ),
+    const SizedBox(height: 8),
+    if (!widget.supportAvailable)
+      const Card(
+        child: Padding(
+          padding: EdgeInsets.all(14),
+          child: Text(
+            'Support requests are not available on this server yet. Contact your school office directly.',
+          ),
+        ),
+      )
+    else if (widget.isOffline)
+      const Card(
+        child: Padding(
+          padding: EdgeInsets.all(14),
+          child: Text(
+            'Support requests need an internet connection. Reconnect to view or submit a request.',
+          ),
+        ),
+      )
+    else
+      FilledButton.icon(
+        onPressed: widget.working ? null : () => _openSupportTicket(context),
+        icon: const Icon(Icons.support_agent_outlined),
+        label: const Text('Contact support'),
+      ),
+    if (widget.supportAvailable && !widget.isOffline) ...[
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton.icon(
+          onPressed: widget.working ? null : widget.onRefresh,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Refresh support requests'),
+        ),
+      ),
+      if (widget.supportTickets.isEmpty)
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(14),
+            child: Text('Your support requests will appear here.'),
+          ),
+        ),
+      ...widget.supportTickets.map(_supportTicketCard),
+    ],
+    const SizedBox(height: 12),
+    Text(
+      widget.user['email']?.toString() ?? '',
+      style: const TextStyle(fontSize: 12, color: Color(0xff6c7a8e)),
+    ),
+    TextButton(
+      onPressed: widget.onChangeServer,
+      child: const Text('Change school server'),
+    ),
+    TextButton(onPressed: widget.onSignOut, child: const Text('Sign out')),
+  ];
+
+  Widget _sectionHeading(String title) => Padding(
+    padding: const EdgeInsets.only(top: 8, bottom: 6),
+    child: Text(
+      title,
+      style: const TextStyle(
+        color: Color(0xff122238),
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+
+  Widget _childHeading(Map<String, dynamic> child) {
+    final student = _student(child);
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      child: Text(
+        '${student['fullName'] ?? 'Child'} · ${child['schoolName'] ?? 'School'}',
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  List<Widget> _recordSection(
+    BuildContext context,
+    String title,
+    List<Map<String, dynamic>> rows,
+    String Function(Map<String, dynamic>) titleOf,
+    String Function(Map<String, dynamic>) subtitleOf, {
+    String Function(Map<String, dynamic>)? detail,
+    Widget Function(Map<String, dynamic>)? action,
+  }) => [
+    const SizedBox(height: 8),
+    _sectionHeading(title),
+    if (rows.isEmpty)
+      const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: Text(
+          'No published information yet.',
+          style: TextStyle(color: Color(0xff68778b)),
+        ),
+      ),
+    ...rows.map(
+      (row) => Card(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(titleOf(row)),
+              subtitle: Text(subtitleOf(row)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap:
+                  () => _showRecordDetail(
+                    context,
+                    titleOf(row),
+                    [
+                      subtitleOf(row),
+                      if ((detail?.call(row) ?? '').isNotEmpty) detail!(row),
+                    ].where((value) => value.isNotEmpty).join('\n\n'),
+                  ),
+            ),
+            if (action != null) action(row),
+          ],
+        ),
+      ),
+    ),
+  ];
+
+  Widget _requestCard(Map<String, dynamic> command) {
+    final status = command['status']?.toString() ?? 'queued';
+    final (label, icon) = switch (status) {
+      'queued' ||
+      'delivered' => ('Waiting for school sync', Icons.sync_outlined),
+      'accepted' => ('Received · awaiting school review', Icons.hourglass_top),
+      'request_approved' => (
+        'Approved by the school',
+        Icons.check_circle_outline,
+      ),
+      'request_rejected' => ('Declined by the school', Icons.cancel_outlined),
+      'needs_info' => ('The school needs more information', Icons.help_outline),
+      'rejected' => ('Could not deliver to the school', Icons.error_outline),
+      _ => ('Status unavailable', Icons.help_outline),
+    };
+    final message = command['message']?.toString() ?? '';
+    return Card(
+      child: ListTile(
+        leading: Icon(icon),
+        title: Text(label),
+        subtitle: Text(
+          [
+            if (message.isNotEmpty && status != 'accepted') message,
+            'Request ${command['operationId'] ?? ''}',
+          ].join(' · '),
+        ),
+      ),
+    );
+  }
+
+  Widget _supportTicketCard(Map<String, dynamic> ticket) {
+    final status = ticket['status']?.toString() ?? 'unknown';
+    final statusLabel = switch (status) {
+      'open' => 'Open',
+      'in_progress' => 'In progress',
+      'waiting_on_parent' => 'Waiting for you',
+      'escalated' => 'Escalated',
+      'resolved' => 'Resolved',
+      'closed' => 'Closed',
+      _ => 'Status unavailable',
+    };
+    final response = ticket['response']?.toString().trim() ?? '';
+    final school = ticket['schoolName']?.toString() ?? 'School support';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.confirmation_number_outlined),
+              title: Text(ticket['subject']?.toString() ?? 'Support request'),
+              subtitle: Text(
+                '${ticket['reference'] ?? 'Reference unavailable'} · $statusLabel · ${ticket['escalationTarget'] == 'school' ? school : 'Platform support'}',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap:
+                  () => _showRecordDetail(
+                    context,
+                    ticket['reference']?.toString() ?? 'Support request',
+                    [
+                      ticket['subject']?.toString() ?? '',
+                      'Status: $statusLabel',
+                      'Sent to: ${ticket['escalationTarget'] == 'school' ? school : 'Platform support'}',
+                      ticket['message']?.toString() ?? '',
+                      if (response.isNotEmpty) 'Response:\n$response',
+                    ].where((line) => line.isNotEmpty).join('\n\n'),
+                  ),
+            ),
+            if (response.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Latest response: $response',
+                    style: const TextStyle(color: Color(0xff52647b)),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSupportTicket(BuildContext context) async {
+    final values = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (_) => _ParentSupportTicketDialog(children: widget.children),
+    );
+    if (values != null) await widget.onSubmitSupportTicket(values);
+  }
+
+  Future<void> _confirmClearCache(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: const Text('Remove saved school information?'),
+            content: const Text(
+              'This removes the offline copy from this phone. It does not delete school records, change your account, or cancel requests still waiting to sync. You can download the information again after reconnecting.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Keep it'),
+              ),
+              FilledButton.tonal(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Remove from this phone'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed == true) await widget.onClearCache();
+  }
+
+  Future<void> _requestLeave(
+    BuildContext context,
+    Map<String, dynamic> child,
+  ) async {
+    final values = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (_) => const _HostedParentRequestDialog(),
+    );
+    if (values == null) return;
+    widget.onSubmitRequest({
+      ...values,
+      'studentPublicId': child['studentPublicId']?.toString() ?? '',
+    });
+  }
+
+  Future<void> _showRecordDetail(
+    BuildContext context,
+    String title,
+    String details,
+  ) => showDialog<void>(
+    context: context,
+    builder:
+        (dialogContext) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(child: Text(details)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+  );
+
+  String _formatSyncTime(Object? value) {
+    final parsed = DateTime.tryParse(value?.toString() ?? '');
+    if (parsed == null) return 'time unavailable';
+    final local = parsed.toLocal();
+    final date = '${local.day}/${local.month}/${local.year}';
+    final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$date at $hour:$minute ${local.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  String _syncLabel(Object? value) {
+    final parsed = DateTime.tryParse(value?.toString() ?? '');
+    if (parsed == null) return 'Last sync time unavailable';
+    final age = DateTime.now().toUtc().difference(parsed.toUtc());
+    final stale = age > const Duration(hours: 24);
+    return '${stale ? 'Stale · ' : 'Updated '}${_formatSyncTime(value)}';
+  }
+}
+
+class _ParentPrivacyPage extends StatelessWidget {
+  const _ParentPrivacyPage({required this.diagnosticsEnabled});
+
+  final bool diagnosticsEnabled;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Privacy and data')),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'What this app does today',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'These notes describe the current Parent app. Your school also '
+          'sets its own rules for student records.',
+        ),
+        const SizedBox(height: 12),
+        const _ParentPrivacySection(
+          title: 'School records',
+          body:
+              'The school controls which children are linked to your account. '
+              'The app requests records for linked children from the school '
+              'Hub or its hosted service. It keeps the latest downloaded '
+              'records on this phone so you can read them offline. The local '
+              'cache is not encrypted by this app; protect the phone with its '
+              'screen lock and sign out on a device you no longer use.',
+        ),
+        const _ParentPrivacySection(
+          title: 'Google Drive backups',
+          body:
+              'This Parent app does not currently upload its records or '
+              'offline cache to Google Drive. Drive backup and restore are '
+              'not available in this version.',
+        ),
+        const _ParentPrivacySection(
+          title: 'Advertising',
+          body:
+              'This version does not display ads or include an advertising '
+              'SDK. School announcements and records are not ad placements.',
+        ),
+        const _ParentPrivacySection(
+          title: 'Fees and app purchases',
+          body:
+              'The app can show fee records entered by the school, but it '
+              'does not collect school-fee payments. In-app subscriptions '
+              'and course purchases are not available in this version.',
+        ),
+        const _ParentPrivacySection(
+          title: 'Request access, correction or deletion',
+          body:
+              'Open Requests, choose the linked child and submit a data access, '
+              'correction or deletion request. You can follow its status in the '
+              'app. Sending or approving a request does not automatically change '
+              'or erase school records; the school must review it and follow its '
+              'record-retention rules.',
+        ),
+        _ParentPrivacySection(
+          title: 'Optional diagnostics',
+          body:
+              'Analytics, crash reports, performance monitoring and '
+              'in-app messages are ${diagnosticsEnabled ? 'enabled because you opted in' : 'off because you have not opted in'}. '
+              'You can change this choice in Explore.',
+        ),
+      ],
+    ),
+  );
+}
+
+class _ParentPrivacySection extends StatelessWidget {
+  const _ParentPrivacySection({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: const EdgeInsets.only(top: 8),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          Text(body, style: const TextStyle(height: 1.45)),
+        ],
+      ),
+    ),
+  );
+}
+
 class _ParentCount extends StatelessWidget {
   const _ParentCount({required this.label, required this.count});
 
@@ -3975,6 +6297,163 @@ class _ParentCount extends StatelessWidget {
     label: Text('$label  $count', style: const TextStyle(fontSize: 11)),
     visualDensity: VisualDensity.compact,
     backgroundColor: const Color(0xffedf3ff),
+  );
+}
+
+class _ParentSupportTicketDialog extends StatefulWidget {
+  const _ParentSupportTicketDialog({required this.children});
+
+  final List<Map<String, dynamic>> children;
+
+  @override
+  State<_ParentSupportTicketDialog> createState() =>
+      _ParentSupportTicketDialogState();
+}
+
+class _ParentSupportTicketDialogState
+    extends State<_ParentSupportTicketDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _subject = TextEditingController();
+  final _message = TextEditingController();
+  String _category = 'technical_issue';
+  String? _studentPublicId;
+
+  static const _categories = <(String, String)>[
+    ('login_access', 'Login or account access'),
+    ('child_linking', 'Linking a child'),
+    ('record_visibility', 'School records'),
+    ('school_fees', 'School fees'),
+    ('platform_payments', 'Platform payments'),
+    ('backup_restore', 'Backup or restore'),
+    ('ads', 'Advertisements'),
+    ('purchases', 'Purchases'),
+    ('technical_issue', 'Technical issue'),
+    ('other', 'Other'),
+  ];
+
+  Map<String, dynamic> _student(Map<String, dynamic> child) =>
+      Map<String, dynamic>.from(
+        (Map<String, dynamic>.from(child['snapshot'] as Map? ?? {}))['student']
+                as Map? ??
+            {},
+      );
+
+  @override
+  void dispose() {
+    _subject.dispose();
+    _message.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Contact support'),
+    content: SizedBox(
+      width: 460,
+      child: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(
+                  labelText: 'What do you need help with?',
+                ),
+                items: [
+                  for (final (value, label) in _categories)
+                    DropdownMenuItem(value: value, child: Text(label)),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _category = value);
+                },
+              ),
+              if (widget.children.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  initialValue: _studentPublicId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'About a child (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Not about a specific child'),
+                    ),
+                    ...widget.children.map((child) {
+                      final student = _student(child);
+                      return DropdownMenuItem<String?>(
+                        value: child['studentPublicId']?.toString(),
+                        child: Text(
+                          '${student['fullName'] ?? 'Child'} · ${child['schoolName'] ?? 'School'}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }),
+                  ],
+                  onChanged:
+                      (value) => setState(() => _studentPublicId = value),
+                ),
+              ],
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _subject,
+                maxLength: 160,
+                decoration: const InputDecoration(labelText: 'Subject'),
+                validator: (value) {
+                  if ((value?.trim().length ?? 0) < 4) {
+                    return 'Enter at least 4 characters.';
+                  }
+                  return null;
+                },
+              ),
+              TextFormField(
+                controller: _message,
+                minLines: 4,
+                maxLines: 7,
+                maxLength: 3000,
+                decoration: const InputDecoration(
+                  labelText: 'How can we help?',
+                  alignLabelWithHint: true,
+                ),
+                validator: (value) {
+                  if ((value?.trim().length ?? 0) < 10) {
+                    return 'Please add a little more detail (at least 10 characters).';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Do not include passwords, sign-in codes, payment card details or highly sensitive student information.',
+                style: TextStyle(fontSize: 12, color: Color(0xff6c7a8e)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        onPressed: () {
+          if (!(_formKey.currentState?.validate() ?? false)) return;
+          Navigator.pop(context, {
+            'category': _category,
+            'subject': _subject.text.trim(),
+            'message': _message.text.trim(),
+            if (_studentPublicId != null) 'studentPublicId': _studentPublicId!,
+          });
+        },
+        icon: const Icon(Icons.send_outlined),
+        label: const Text('Submit request'),
+      ),
+    ],
   );
 }
 
@@ -3993,6 +6472,30 @@ class _HostedParentRequestDialogState
   final _startsOn = TextEditingController();
   final _endsOn = TextEditingController();
   String _requestType = 'leave';
+
+  Future<void> _pickDate(
+    TextEditingController controller, {
+    DateTime? firstDate,
+    DateTime? lastDate,
+  }) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final minimum = firstDate ?? DateTime(2000);
+    final existing = DateTime.tryParse(controller.text);
+    final initial =
+        existing != null && !existing.isBefore(minimum)
+            ? existing
+            : (today.isBefore(minimum) ? minimum : today);
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: minimum,
+      lastDate: lastDate ?? DateTime(today.year + 3, 12, 31),
+    );
+    if (selected != null && mounted) {
+      controller.text = selected.toIso8601String().substring(0, 10);
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
@@ -4021,40 +6524,105 @@ class _HostedParentRequestDialogState
                   child: Text('Profile change'),
                 ),
                 DropdownMenuItem(value: 'document', child: Text('Document')),
+                DropdownMenuItem(
+                  value: 'data_access',
+                  child: Text('Access my child’s data'),
+                ),
+                DropdownMenuItem(
+                  value: 'data_correction',
+                  child: Text('Correct my child’s data'),
+                ),
+                DropdownMenuItem(
+                  value: 'data_deletion',
+                  child: Text('Delete my child’s data'),
+                ),
+                DropdownMenuItem(
+                  value: 'attendance_correction',
+                  child: Text('Report an attendance mistake'),
+                ),
                 DropdownMenuItem(value: 'other', child: Text('Other')),
               ],
               onChanged:
                   (value) => setState(() => _requestType = value ?? 'leave'),
             ),
-            TextFormField(
-              controller: _startsOn,
-              decoration: const InputDecoration(
-                labelText: 'Start date (optional)',
-                hintText: 'YYYY-MM-DD',
+            if (_requestType.startsWith('data_'))
+              const _InfoBanner(
+                text:
+                    'This is sent to the school for review. It does not automatically change or delete records. The school must check its record-retention rules before acting.',
               ),
-              validator:
-                  (value) =>
-                      validateOptionalIsoDate(value, label: 'start date'),
-            ),
-            TextFormField(
-              controller: _endsOn,
-              decoration: const InputDecoration(
-                labelText: 'End date (optional)',
-                hintText: 'YYYY-MM-DD',
+            if (_requestType == 'attendance_correction')
+              const _InfoBanner(
+                text:
+                    'The school will review this child’s attendance for the selected date. This request does not change the official record automatically.',
               ),
-              validator:
-                  (value) =>
-                      validateOptionalIsoDate(value, label: 'end date') ??
-                      validateOptionalRequestDateRange(
-                        startsOn: _startsOn.text,
-                        endsOn: value,
-                      ),
-            ),
+            if (_requestType == 'leave') ...[
+              TextFormField(
+                controller: _startsOn,
+                readOnly: true,
+                onTap: () => _pickDate(_startsOn),
+                decoration: const InputDecoration(
+                  labelText: 'Start date (optional)',
+                  hintText: 'Choose a date',
+                  suffixIcon: Icon(Icons.calendar_today_outlined),
+                ),
+                key: const ValueKey('parent-request-start-date'),
+                onTapOutside:
+                    (_) => FocusManager.instance.primaryFocus?.unfocus(),
+                validator:
+                    (value) =>
+                        validateOptionalIsoDate(value, label: 'start date'),
+              ),
+              TextFormField(
+                controller: _endsOn,
+                readOnly: true,
+                onTap:
+                    () => _pickDate(
+                      _endsOn,
+                      firstDate:
+                          DateTime.tryParse(_startsOn.text) ?? DateTime(2000),
+                    ),
+                decoration: const InputDecoration(
+                  labelText: 'End date (optional)',
+                  hintText: 'Choose a date',
+                  suffixIcon: Icon(Icons.calendar_today_outlined),
+                ),
+                key: const ValueKey('parent-request-end-date'),
+                validator:
+                    (value) =>
+                        validateOptionalIsoDate(value, label: 'end date') ??
+                        validateOptionalRequestDateRange(
+                          startsOn: _startsOn.text,
+                          endsOn: value,
+                        ),
+              ),
+            ] else if (_requestType == 'attendance_correction') ...[
+              TextFormField(
+                controller: _startsOn,
+                readOnly: true,
+                onTap:
+                    () => _pickDate(
+                      _startsOn,
+                      lastDate: DateUtils.dateOnly(DateTime.now()),
+                    ),
+                decoration: const InputDecoration(
+                  labelText: 'Attendance date',
+                  hintText: 'Choose the date to review',
+                  suffixIcon: Icon(Icons.calendar_today_outlined),
+                ),
+                key: const ValueKey('parent-attendance-correction-date'),
+                validator: validateAttendanceCorrectionDate,
+              ),
+            ],
             TextFormField(
               controller: _message,
               minLines: 2,
               maxLines: 4,
-              decoration: const InputDecoration(labelText: 'Message'),
+              decoration: InputDecoration(
+                labelText:
+                    _requestType.startsWith('data_')
+                        ? 'Details for the school'
+                        : 'Message',
+              ),
               validator:
                   (value) =>
                       (value?.trim().length ?? 0) < 3
@@ -4092,6 +6660,18 @@ IconData _iconFor(String area) {
   if (area.toLowerCase().contains('message')) return Icons.chat_bubble_outline;
   return Icons.school_outlined;
 }
+
+String _parentRequestTypeLabel(Object? value) => switch (value?.toString()) {
+  'leave' => 'Leave request',
+  'profile_change' => 'Profile change',
+  'document' => 'Document request',
+  'data_access' => 'Data access request',
+  'data_correction' => 'Data correction request',
+  'data_deletion' => 'Data deletion request',
+  'attendance_correction' => 'Attendance correction request',
+  'other' => 'Other request',
+  _ => value?.toString().replaceAll('_', ' ') ?? 'Request',
+};
 
 class _BiometricUnlockView extends StatelessWidget {
   const _BiometricUnlockView({
@@ -4383,4 +6963,33 @@ class _InfoBanner extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Applies the parent's in-app preference on top of the device's system scale.
+/// Keeping the system scaler as the delegate preserves its nonlinear behavior.
+class _PreferenceTextScaler extends TextScaler {
+  const _PreferenceTextScaler(this.systemScaler, this.preferenceScale);
+
+  final TextScaler systemScaler;
+  final double preferenceScale;
+
+  @override
+  double scale(double fontSize) =>
+      systemScaler.scale(fontSize * preferenceScale);
+
+  // TextScaler still requires this deprecated compatibility getter.
+  @override
+  double get textScaleFactor {
+    // ignore: deprecated_member_use
+    return systemScaler.textScaleFactor * preferenceScale;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PreferenceTextScaler &&
+      other.systemScaler == systemScaler &&
+      other.preferenceScale == preferenceScale;
+
+  @override
+  int get hashCode => Object.hash(systemScaler, preferenceScale);
 }

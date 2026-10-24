@@ -173,18 +173,28 @@ class ApiClient implements LocalSyncApi {
     required String role,
     required String googleIdToken,
     String? schoolId,
-  }) => _send(
-    'POST',
-    '/auth/google-login',
-    body: {
-      'email': email,
-      'phone': phone,
-      'role': role,
-      'google_id_token': googleIdToken,
-      if (schoolId?.isNotEmpty == true) 'school_id': schoolId,
-      'device_name': 'school-erp-mobile',
-    },
-  );
+  }) async {
+    final device = (await deviceId()).replaceAll('-', '');
+    final platform =
+        Platform.isAndroid
+            ? 'Android'
+            : Platform.isIOS
+            ? 'iOS'
+            : 'Mobile';
+    return _send(
+      'POST',
+      '/auth/google-login',
+      body: {
+        'email': email,
+        'phone': phone,
+        'role': role,
+        'google_id_token': googleIdToken,
+        if (schoolId?.isNotEmpty == true) 'school_id': schoolId,
+        'device_name':
+            'Family Hub $role · $platform · ${device.substring(0, 6)}',
+      },
+    );
+  }
 
   Future<Map<String, dynamic>> appUpdate({
     required String app,
@@ -241,10 +251,43 @@ class ApiClient implements LocalSyncApi {
 
   Future<Map<String, dynamic>> currentUser() =>
       _send('GET', '/auth/me', authenticated: true);
+  Future<List<Map<String, dynamic>>> activeSessions() async {
+    final response = await _send('GET', '/auth/sessions', authenticated: true);
+    final rows = response['sessions'];
+    return rows is List
+        ? rows
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList()
+        : const [];
+  }
+
+  Future<Map<String, dynamic>> revokeSession(String sessionId) => _send(
+    'DELETE',
+    '/auth/sessions/${Uri.encodeComponent(sessionId)}',
+    authenticated: true,
+  );
+
+  Future<Map<String, dynamic>> revokeAllSessions() =>
+      _send('DELETE', '/auth/sessions', authenticated: true);
+
   Future<Map<String, dynamic>> hostedParentChildren() =>
       _send('GET', '/parent/children', authenticated: true);
   Future<Map<String, dynamic>> hostedParentCommands() =>
       _send('GET', '/parent/commands', authenticated: true);
+  Future<Map<String, dynamic>> hostedParentSupportTickets() =>
+      _send('GET', '/parent/support-tickets', authenticated: true);
+  Future<Map<String, dynamic>> hostedParentNotificationPreferences() =>
+      _send('GET', '/parent/notification-preferences', authenticated: true);
+  Future<Map<String, dynamic>> updateHostedParentNotificationPreference({
+    required String category,
+    required bool enabled,
+  }) => _send(
+    'POST',
+    '/parent/notification-preferences',
+    body: {'category': category, 'enabled': enabled},
+    authenticated: true,
+  );
   Future<Map<String, dynamic>> submitHostedParentRequest({
     required String operationId,
     required String studentPublicId,
@@ -267,6 +310,46 @@ class ApiClient implements LocalSyncApi {
       },
     },
     authenticated: true,
+  );
+  Future<Map<String, dynamic>> submitHostedParentSupportTicket({
+    required String operationId,
+    required String category,
+    required String subject,
+    required String message,
+    String? studentPublicId,
+  }) => _send(
+    'POST',
+    '/parent/support-tickets',
+    body: {
+      'operation_id': operationId,
+      'category': category,
+      'subject': subject,
+      'message': message,
+      if (studentPublicId != null && studentPublicId.isNotEmpty)
+        'student_public_id': studentPublicId,
+    },
+    authenticated: true,
+  );
+  Future<Map<String, dynamic>> submitPublicParentLoginSupportTicket({
+    required String operationId,
+    required String name,
+    required String email,
+    required String phone,
+    required String subject,
+    required String message,
+    String? school,
+  }) => _send(
+    'POST',
+    '/parent/support-tickets/public-login',
+    body: {
+      'operation_id': operationId,
+      'name': name,
+      'email': email,
+      'phone': phone,
+      'subject': subject,
+      'message': message,
+      if (school != null && school.trim().isNotEmpty) 'school': school.trim(),
+    },
   );
   Future<void> logout() async =>
       _send('POST', '/auth/logout', authenticated: true);

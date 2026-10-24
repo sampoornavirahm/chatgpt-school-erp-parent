@@ -31,7 +31,7 @@ class OfflineSyncStore {
         !await databaseFactory.databaseExists(databasePath);
     final database = await openDatabase(
       databasePath,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE cached_classes (
@@ -65,11 +65,14 @@ class OfflineSyncStore {
           CREATE TABLE cached_attendance (
             student_public_id TEXT NOT NULL,
             attendance_date TEXT NOT NULL,
+            period INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL,
+            status_label TEXT NOT NULL DEFAULT '',
+            status_category TEXT NOT NULL DEFAULT '',
             reason TEXT NOT NULL,
             revision INTEGER NOT NULL,
             updated_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (student_public_id, attendance_date)
+            PRIMARY KEY (student_public_id, attendance_date, period)
           )
         ''');
         await db.execute('''
@@ -118,6 +121,63 @@ class OfflineSyncStore {
           await _createMobileRecords(db);
         }
         if (oldVersion < 3) await _createHostedParentTables(db);
+        if (oldVersion < 4) {
+          await db.execute(
+            'ALTER TABLE cached_attendance RENAME TO cached_attendance_v3',
+          );
+          await db.execute('''
+            CREATE TABLE cached_attendance (
+              student_public_id TEXT NOT NULL,
+              attendance_date TEXT NOT NULL,
+              period INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL,
+              status_label TEXT NOT NULL DEFAULT '',
+              status_category TEXT NOT NULL DEFAULT '',
+              reason TEXT NOT NULL,
+              revision INTEGER NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT '',
+              PRIMARY KEY (student_public_id, attendance_date, period)
+            )
+          ''');
+          await db.execute('''
+            INSERT INTO cached_attendance
+              (student_public_id,attendance_date,period,status,reason,revision,updated_at)
+            SELECT student_public_id,attendance_date,0,status,reason,revision,updated_at
+            FROM cached_attendance_v3
+          ''');
+          await db.execute('DROP TABLE cached_attendance_v3');
+          final hasSyncOutbox = await db.rawQuery(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_outbox'",
+          );
+          if (hasSyncOutbox.isNotEmpty) {
+            final legacyAttendanceOperations = await db.query(
+              'sync_outbox',
+              columns: ['operation_id', 'entity_id', 'payload_json'],
+              where: "entity_type='attendance'",
+            );
+            for (final operation in legacyAttendanceOperations) {
+              final payload = _decode(operation['payload_json']?.toString());
+              final studentPublicId = payload?['studentPublicId']?.toString();
+              final date = payload?['date']?.toString();
+              if (payload == null || studentPublicId == null || date == null) {
+                continue;
+              }
+              final period = _int(payload['period']);
+              final entityId = '$studentPublicId:$date:$period';
+              if (payload['period'] == period &&
+                  operation['entity_id'] == entityId) {
+                continue;
+              }
+              payload['period'] = period;
+              await db.update(
+                'sync_outbox',
+                {'entity_id': entityId, 'payload_json': jsonEncode(payload)},
+                where: 'operation_id=?',
+                whereArgs: [operation['operation_id']],
+              );
+            }
+          }
+        }
       },
       onOpen: (db) async {
         await db.execute('PRAGMA foreign_keys=ON');
@@ -222,6 +282,10 @@ class OfflineSyncStore {
       }
     }
     return values;
+  }
+
+  Future<void> clearHostedParentCache() async {
+    await _database.delete('hosted_parent_cache');
   }
 
   Future<void> queueHostedParentCommand(Map<String, dynamic> command) async {
@@ -403,7 +467,10 @@ class OfflineSyncStore {
       batch.insert('cached_attendance', {
         'student_public_id': row['studentPublicId'],
         'attendance_date': row['date'],
+        'period': row['period'] ?? 0,
         'status': row['status'],
+        'status_label': row['statusLabel'] ?? '',
+        'status_category': row['statusCategory'] ?? '',
         'reason': row['reason'] ?? '',
         'revision': row['revision'] ?? 1,
         'updated_at': row['updatedAt'] ?? '',
@@ -438,7 +505,10 @@ class OfflineSyncStore {
       batch.insert('cached_attendance', {
         'student_public_id': payload['studentPublicId'],
         'attendance_date': payload['date'],
+        'period': payload['period'] ?? 0,
         'status': payload['status'],
+        'status_label': payload['statusLabel'] ?? '',
+        'status_category': payload['statusCategory'] ?? '',
         'reason': payload['reason'] ?? '',
         'revision': event['revision'] ?? 1,
         'updated_at': event['createdAt'] ?? '',
@@ -455,6 +525,7 @@ class OfflineSyncStore {
     required String date,
     required String status,
     required int? baseRevision,
+    int period = 0,
     String reason = '',
     String correctionReason = '',
   }) async {
@@ -463,6 +534,7 @@ class OfflineSyncStore {
     final payload = {
       'studentPublicId': studentPublicId,
       'date': date,
+      'period': period,
       'status': status,
       'reason': reason,
       'correctionReason': correctionReason,
@@ -473,7 +545,7 @@ class OfflineSyncStore {
       'device_id': deviceId,
       'user_id': userId,
       'entity_type': 'attendance',
-      'entity_id': '$studentPublicId:$date',
+      'entity_id': '$studentPublicId:$date:$period',
       'operation': 'attendance.mark',
       'payload_schema_version': 1,
       'created_at': now.toIso8601String(),
@@ -539,7 +611,10 @@ class OfflineSyncStore {
     limit: limit,
   );
 
-  Future<List<Map<String, Object?>>> queuedAttendanceDrafts(String date) async {
+  Future<List<Map<String, Object?>>> queuedAttendanceDrafts(
+    String date, {
+    int? period,
+  }) async {
     final rows = await _database.query(
       'sync_outbox',
       where:
@@ -550,7 +625,8 @@ class OfflineSyncStore {
       try {
         final payload =
             jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
-        return payload['date'] == date;
+        return payload['date'] == date &&
+            (period == null || (payload['period'] ?? 0) == period);
       } catch (_) {
         return false;
       }
@@ -585,7 +661,10 @@ class OfflineSyncStore {
         batch.insert('cached_attendance', {
           'student_public_id': result['studentPublicId'],
           'attendance_date': result['date'],
+          'period': result['period'] ?? 0,
           'status': result['attendanceStatus'],
+          'status_label': result['statusLabel'] ?? '',
+          'status_category': result['statusCategory'] ?? '',
           'reason': result['reason'] ?? '',
           'revision': result['revision'] ?? 1,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -726,12 +805,13 @@ class OfflineSyncStore {
       );
   Future<Map<String, Object?>?> attendance(
     String studentPublicId,
-    String date,
-  ) async {
+    String date, {
+    int period = 0,
+  }) async {
     final rows = await _database.query(
       'cached_attendance',
-      where: 'student_public_id=? AND attendance_date=?',
-      whereArgs: [studentPublicId, date],
+      where: 'student_public_id=? AND attendance_date=? AND period=?',
+      whereArgs: [studentPublicId, date, period],
       limit: 1,
     );
     return rows.isEmpty ? null : rows.first;
@@ -739,7 +819,7 @@ class OfflineSyncStore {
 
   Future<List<Map<String, Object?>>> attendanceRows() => _database.query(
     'cached_attendance',
-    orderBy: 'attendance_date DESC',
+    orderBy: 'attendance_date DESC,period,student_public_id',
     limit: 1000,
   );
 
@@ -755,6 +835,15 @@ class OfflineSyncStore {
         .map((row) => _decode(row['payload_json']?.toString()))
         .whereType<Map<String, dynamic>>()
         .toList();
+  }
+
+  Future<String?> mobileRecordsUpdatedAt(String entityType) async {
+    final rows = await _database.rawQuery(
+      'SELECT MAX(updated_at) AS updatedAt FROM mobile_records WHERE entity_type=?',
+      [entityType],
+    );
+    final value = rows.isEmpty ? null : rows.first['updatedAt']?.toString();
+    return value == null || value.isEmpty ? null : value;
   }
 
   Future<Map<String, dynamic>?> mobileRecord(
