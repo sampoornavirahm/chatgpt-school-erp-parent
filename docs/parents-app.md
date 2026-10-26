@@ -10,7 +10,9 @@ Ask the school office for a one-use pairing code, join the school's Wi-Fi, choos
 
 ### Hosted school connection
 
-Enter the PHP service's HTTPS API address ending in `/api/v1`, then sign in with the Gmail address and phone number recorded by the school and verify the same Google account. If that same verified contact is linked at more than one active school, one sign-in shows all linked children; each child card names its school. The school controls every child link, and the app cannot grant itself access. Hosted information is the last student snapshot received by the server and can be refreshed when the server is reachable.
+Enter the PHP service's HTTPS API address ending in `/api/v1`, enter the Google email recorded by the school, and verify that Google account. The parent app does not ask for the registered phone number during sign-in. The server still checks that the verified account has an active parent record linked to a child. The school controls every child link, and the app cannot grant itself access. Hosted information is the last student snapshot received by the server and can be refreshed when the server is reachable.
+
+If the server has not completed its initial setup, the Parent app shows a message to contact the school administrator. Parents should not run the school-server setup flow.
 
 ## Use the app
 
@@ -22,7 +24,7 @@ Enter the PHP service's HTTPS API address ending in `/api/v1`, then sign in with
 
 Hosted parents can open **Explore** to enable or mute push alerts for school announcements, timetable/calendar changes and new homework. These category choices are saved by the PHP service and shared across the parent's verified school accounts. Muting a push category does not remove its records from the app. Push delivery still requires notification permission in the phone's settings; local Hub mode does not currently expose category controls.
 
-Before signing in, parents can use **Need help signing in?** to send a login-access request with contact details to the operator. After signing in with the same registered Gmail and phone number, that request can be tracked in Explore. Signed-in hosted parents can open **Explore → Help and support** for account access, child linking, school records, fees, backups, platform payments, ads or purchases, and may associate a request with a linked child. Requests receive a reference and status and appear in the central operator's support inbox; the operator can add a response visible in the app after refresh. Contact details on a pre-login request are unverified. Routing to a school or platform team is a manual operator handoff; new tickets and replies do not send email or push alerts.
+Before signing in, parents can use **Need help signing in?** to send a login-access request with contact details to the operator. After signing in with the same verified Google email, that request can be tracked in Explore. Signed-in hosted parents can open **Explore → Help and support** for account access, child linking, school records, fees, backups, platform payments, ads or purchases, and may associate a request with a linked child. Requests receive a reference and status and appear in the central operator's support inbox; the operator can add a response visible in the app after refresh. Contact details on a pre-login request are unverified. Routing to a school or platform team is a manual operator handoff; new tickets and replies do not send email or push alerts.
 
 Parents can also adjust app text size in **Explore → Account and preferences**. The setting is saved on the phone and combines with the phone's own text scaling and accessibility settings. App language selection is not available yet; the current interface is English-only.
 

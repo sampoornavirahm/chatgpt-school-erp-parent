@@ -877,7 +877,6 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
               )
               : await _api.loginWithGoogle(
                 email: values['email']!,
-                phone: values['phone']!,
                 role: role,
                 googleIdToken: googleIdToken!,
                 schoolId: values['schoolId'],
@@ -889,7 +888,6 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
         }
         response = await _api.loginWithGoogle(
           email: values['email']!,
-          phone: values['phone']!,
           role: role,
           googleIdToken: googleIdToken!,
           schoolId: selectedSchoolId,
@@ -1732,6 +1730,28 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       );
     }
     if (_setupStatus?['configured'] != true) {
+      if (widget.role == MobileRole.parent) {
+        return _Page(
+          role: widget.role,
+          child: _CardBody(
+            title: 'School server is not ready',
+            subtitle:
+                'This server has not completed school setup yet. Parents should not set up the server. Ask the school administrator to finish setup, or check that you connected to the correct school server.',
+            error: _error,
+            children: [
+              _PrimaryButton(
+                label: 'Check connection again',
+                working: _working,
+                onPressed: _refresh,
+              ),
+              TextButton(
+                onPressed: _changeServer,
+                child: const Text('Use another school server'),
+              ),
+            ],
+          ),
+        );
+      }
       return _SetupView(
         role: widget.role,
         trialEnabled: _setupStatus?['trial_enabled'] == true,
@@ -4206,39 +4226,45 @@ class _LoginViewState extends State<_LoginView> {
           key: _formKey,
           child: Column(
             children: [
-              SegmentedButton<String>(
-                segments: [
-                  ButtonSegment(
-                    value: widget.role.apiValue,
-                    label: Text('${widget.role.title}'),
-                  ),
-                  const ButtonSegment(
-                    value: 'school_admin',
-                    label: Text('School admin'),
-                  ),
-                ],
-                selected: {_selectedRole},
-                onSelectionChanged:
-                    (value) => setState(() => _selectedRole = value.first),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _schoolId,
-                decoration: const InputDecoration(
-                  labelText: 'School ID (if provided)',
-                  helperText: 'Required when several schools use this server.',
+              if (widget.role != MobileRole.parent) ...[
+                SegmentedButton<String>(
+                  segments: [
+                    ButtonSegment(
+                      value: widget.role.apiValue,
+                      label: Text('${widget.role.title}'),
+                    ),
+                    const ButtonSegment(
+                      value: 'school_admin',
+                      label: Text('School admin'),
+                    ),
+                  ],
+                  selected: {_selectedRole},
+                  onSelectionChanged:
+                      (value) => setState(() => _selectedRole = value.first),
                 ),
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _schoolId,
+                  decoration: const InputDecoration(
+                    labelText: 'School ID (if provided)',
+                    helperText:
+                        'Required when several schools use this server.',
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               TextFormField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(
                   labelText: 'Google account email',
+                  helperText:
+                      'Use the Google account registered with the school.',
                 ),
                 validator: _emailValidator,
               ),
-              if (_selectedRole != 'school_admin') ...[
+              if (_selectedRole != 'school_admin' &&
+                  widget.role != MobileRole.parent) ...[
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _phone,

@@ -170,7 +170,7 @@ class ApiClient implements LocalSyncApi {
 
   Future<Map<String, dynamic>> loginWithGoogle({
     required String email,
-    required String phone,
+    String? phone,
     required String role,
     required String googleIdToken,
     String? schoolId,
@@ -187,7 +187,7 @@ class ApiClient implements LocalSyncApi {
       '/auth/google-login',
       body: {
         'email': email,
-        'phone': phone,
+        if (phone?.trim().isNotEmpty == true) 'phone': phone!.trim(),
         'role': role,
         'google_id_token': googleIdToken,
         if (schoolId?.isNotEmpty == true) 'school_id': schoolId,
