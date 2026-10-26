@@ -7,18 +7,17 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'hosted parent has five destinations and linked-child summaries',
+    'hosted parent has the four V3 destinations and linked-child summaries',
     (tester) async {
       await tester.pumpWidget(_parentApp());
 
       expect(find.byType(NavigationBar), findsOneWidget);
       expect(find.text('Home'), findsWidgets);
-      expect(find.text('Learning'), findsOneWidget);
-      expect(find.text('Inbox'), findsOneWidget);
-      expect(find.text('Payments'), findsOneWidget);
-      expect(find.text('Explore'), findsOneWidget);
+      expect(find.text('Learn+'), findsOneWidget);
+      expect(find.text('Shop'), findsOneWidget);
+      expect(find.text('Settings'), findsOneWidget);
       expect(find.text('Mira Shah'), findsOneWidget);
-      expect(find.text('Aster School · Class 3 A'), findsOneWidget);
+      expect(find.text('Class 3 · A · Aster School'), findsOneWidget);
       expect(find.textContaining('Stale ·'), findsOneWidget);
       expect(
         find.text('Offline · showing the last saved school information.'),
@@ -31,22 +30,29 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(_parentApp());
-    await tester.tap(find.text('Learning'));
+    await tester.tap(find.text('Learn+'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Showing information for'), findsOneWidget);
-    expect(find.text('Timetable'), findsOneWidget);
-    expect(find.text('Open class'), findsOneWidget);
+    expect(find.text('Mira Shah · Aster School'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.textContaining('School schedule ·'));
     expect(find.textContaining('School schedule ·'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('Timetable'));
+    expect(find.text('Timetable'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('Open class'));
+    expect(find.text('Open class'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('Homework'));
     expect(find.text('Homework'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('Math practice'));
     expect(find.text('Math practice'), findsOneWidget);
     expect(find.textContaining('Rina Patel'), findsOneWidget);
     expect(find.textContaining('Samir Khan'), findsNothing);
 
+    await _scrollToTop(tester);
     await tester.ensureVisible(find.text('Week'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Week'));
     await tester.pumpAndSettle();
+    await _scrollUntilVisible(tester, find.textContaining('Samir Khan'));
     expect(find.textContaining('Samir Khan'), findsOneWidget);
 
     await tester.ensureVisible(find.text('Math practice'));
@@ -55,7 +61,7 @@ void main() {
     expect(find.textContaining('Complete pages 4–5.'), findsOneWidget);
   });
 
-  testWidgets('parents can turn off a notification category from Explore', (
+  testWidgets('parents can turn off a notification category from Settings', (
     tester,
   ) async {
     String? changedCategory;
@@ -68,14 +74,18 @@ void main() {
         },
       ),
     );
-    await tester.tap(find.text('Explore'));
+    await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
 
+    await _scrollUntilVisible(tester, find.text('School announcements'));
     expect(find.text('School announcements'), findsOneWidget);
+    await _scrollUntilVisible(
+      tester,
+      find.text('Timetable and calendar updates'),
+    );
     expect(find.text('Timetable and calendar updates'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('New homework'));
     expect(find.text('New homework'), findsOneWidget);
-    await tester.ensureVisible(find.text('New homework'));
-    await tester.pumpAndSettle();
     await tester.tap(
       find.ancestor(
         of: find.text('New homework'),
@@ -86,14 +96,14 @@ void main() {
     expect(changedValue, isFalse);
   });
 
-  testWidgets('parents can adjust in-app text size from Explore', (
+  testWidgets('parents can adjust in-app text size from Settings', (
     tester,
   ) async {
     double? selectedScale;
     await tester.pumpWidget(
       _parentApp(onTextScaleChanged: (value) => selectedScale = value),
     );
-    await tester.tap(find.text('Explore'));
+    await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
 
     expect(find.text('Text size · 100%'), findsOneWidget);
@@ -107,9 +117,9 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(_parentApp());
-    await tester.tap(find.text('Explore'));
+    await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Privacy and data'));
+    await _scrollUntilVisible(tester, find.text('Privacy and data'));
     await tester.tap(find.text('Privacy and data'));
     await tester.pumpAndSettle();
 
@@ -128,7 +138,7 @@ void main() {
     expect(find.text('Optional diagnostics'), findsOneWidget);
   });
 
-  testWidgets('hosted parent sees school calendar events in Learning', (
+  testWidgets('hosted parent sees school calendar events in Learn+', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -147,7 +157,7 @@ void main() {
         ],
       ),
     );
-    await tester.tap(find.text('Learning'));
+    await tester.tap(find.text('Learn+'));
     await tester.pumpAndSettle();
 
     expect(find.text('Family calendar'), findsOneWidget);
@@ -158,25 +168,42 @@ void main() {
     );
   });
 
-  testWidgets('parent can review school attendance records from Learning', (
+  testWidgets('parent can review school attendance records from Learn+', (
     tester,
   ) async {
     await tester.pumpWidget(_parentApp());
-    await tester.tap(find.text('Learning'));
+    await tester.tap(find.text('Learn+'));
     await tester.pumpAndSettle();
 
+    await _scrollUntilVisible(tester, find.text('Attendance'));
     expect(find.text('Attendance'), findsOneWidget);
-    expect(find.textContaining('Status: Present · Full day'), findsOneWidget);
-    expect(
-      find.textContaining('Status: Medical leave · Period 2'),
-      findsOneWidget,
+    await _scrollUntilVisible(
+      tester,
+      find.textContaining('Status: Present · Full day'),
     );
-    expect(find.text('Stale · 23/10/2026 at 12:30 PM'), findsOneWidget);
+    expect(find.textContaining('Status: Present · Full day'), findsOneWidget);
+    await _scrollUntilVisible(
+      tester,
+      find.textContaining('Stale · 23/10/2026 at'),
+    );
+    expect(find.textContaining('Stale · 23/10/2026 at'), findsOneWidget);
+    expect(find.text('23/10/2026'), findsOneWidget);
     await tester.ensureVisible(find.text('23/10/2026'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('23/10/2026'));
     await tester.pumpAndSettle();
     expect(
       find.textContaining('this view does not change attendance'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    await _scrollUntilVisible(
+      tester,
+      find.textContaining('Status: Medical leave · Period 2'),
+    );
+    expect(
+      find.textContaining('Status: Medical leave · Period 2'),
       findsOneWidget,
     );
   });
@@ -188,8 +215,8 @@ void main() {
     await tester.pumpWidget(
       _parentApp(onSubmitRequest: (value) => submitted = value),
     );
-    await tester.ensureVisible(find.text('Request leave'));
-    await tester.tap(find.text('Request leave'));
+    await tester.ensureVisible(find.text('Request · Mira'));
+    await tester.tap(find.text('Request · Mira'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const ValueKey('parent-request-start-date')));
@@ -215,8 +242,8 @@ void main() {
       await tester.pumpWidget(
         _parentApp(onSubmitRequest: (value) => submitted = value),
       );
-      await tester.ensureVisible(find.text('Request leave'));
-      await tester.tap(find.text('Request leave'));
+      await tester.ensureVisible(find.text('Request · Mira'));
+      await tester.tap(find.text('Request · Mira'));
       await tester.pumpAndSettle();
       await tester.tap(find.byType(DropdownButtonFormField<String>));
       await tester.pumpAndSettle();
@@ -260,8 +287,23 @@ void main() {
         ],
       ),
     );
+    await tester.tap(find.text('Learn+'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Notices'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Notices'));
+    await tester.pumpAndSettle();
+    await _scrollUntilVisible(
+      tester,
+      find.text('Received · awaiting school review'),
+    );
     expect(find.text('Received · awaiting school review'), findsOneWidget);
+    await _scrollUntilVisible(tester, find.text('Approved by the school'));
     expect(find.text('Approved by the school'), findsOneWidget);
+    await _scrollUntilVisible(
+      tester,
+      find.text('The school needs more information'),
+    );
     expect(find.text('The school needs more information'), findsOneWidget);
 
     await tester.pumpWidget(
@@ -271,6 +313,13 @@ void main() {
         ],
       ),
     );
+    await tester.tap(find.text('Learn+'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Notices'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Notices'));
+    await tester.pumpAndSettle();
+    await _scrollUntilVisible(tester, find.text('Declined by the school'));
     expect(find.text('Declined by the school'), findsOneWidget);
   });
 
@@ -284,18 +333,16 @@ void main() {
       );
       expect(find.textContaining('Attendance'), findsNothing);
       expect(find.textContaining('Fee records'), findsNothing);
-      await tester.tap(find.text('Learning'));
+      await tester.tap(find.text('Learn+'));
       await tester.pumpAndSettle();
       expect(find.text('Attendance'), findsNothing);
       expect(find.text('Homework'), findsNothing);
       expect(find.text('Published results'), findsNothing);
-      expect(find.text('Request leave'), findsNothing);
+      expect(find.textContaining('Request ·'), findsNothing);
     },
   );
 
-  testWidgets('opening a schedule notification selects Learning', (
-    tester,
-  ) async {
+  testWidgets('opening a schedule notification selects Learn+', (tester) async {
     await tester.pumpWidget(_parentApp());
     await tester.pumpWidget(
       _parentApp(
@@ -309,9 +356,7 @@ void main() {
     expect(navigation.selectedIndex, 1);
   });
 
-  testWidgets('opening a homework notification selects Learning', (
-    tester,
-  ) async {
+  testWidgets('opening a homework notification selects Learn+', (tester) async {
     await tester.pumpWidget(_parentApp());
     await tester.pumpWidget(
       _parentApp(
@@ -455,3 +500,21 @@ Widget _parentApp({
     notificationOpened: notificationOpened,
   ),
 );
+
+Future<void> _scrollUntilVisible(WidgetTester tester, Finder finder) async {
+  final scrollable = find.descendant(
+    of: find.byType(ListView).last,
+    matching: find.byType(Scrollable),
+  );
+  await tester.scrollUntilVisible(finder, 240, scrollable: scrollable);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _scrollToTop(WidgetTester tester) async {
+  final scrollable = find.descendant(
+    of: find.byType(ListView).last,
+    matching: find.byType(Scrollable),
+  );
+  await tester.drag(scrollable, const Offset(0, 1000));
+  await tester.pumpAndSettle();
+}

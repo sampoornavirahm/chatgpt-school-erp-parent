@@ -5570,6 +5570,9 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
 
   List<Widget> _parentV3Home(BuildContext context) {
     final children = _visibleChildren;
+    final hasFullAccessChild = children.any(
+      (child) => child['accessLevel'] != 'schedule_only',
+    );
     if (widget.children.isEmpty) {
       return [
         _sectionHeading(
@@ -5653,126 +5656,128 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
     return [
       _sectionHeading('Your children'),
       for (final child in children) _parentV3ChildCard(context, child),
-      _sectionHeading('Needs your attention'),
-      _v3Card(
-        child: Column(
+      if (hasFullAccessChild) _sectionHeading('Needs your attention'),
+      if (hasFullAccessChild)
+        _v3Card(
+          child: Column(
+            children: [
+              _v3AttentionRow(
+                icon: Icons.menu_book_outlined,
+                title:
+                    homeworkRows.isEmpty
+                        ? 'Homework'
+                        : '${homeworkRows.length} homework item${homeworkRows.length == 1 ? '' : 's'}',
+                subtitle:
+                    homeworkRows.isEmpty
+                        ? 'No new homework has been published.'
+                        : _attentionSubtitle(
+                          homeworkRows.first,
+                          'Due date not provided',
+                        ),
+                action: 'View',
+                onTap:
+                    () => setState(() {
+                      _selectedIndex = 1;
+                      _learnSectionIndex = 0;
+                    }),
+              ),
+              const Divider(height: 20),
+              _v3AttentionRow(
+                icon: Icons.payments_outlined,
+                title:
+                    dueFees.isEmpty
+                        ? 'Fee records'
+                        : '${dueFees.length} fee item${dueFees.length == 1 ? '' : 's'} to review',
+                subtitle:
+                    dueFees.isEmpty
+                        ? 'See published fee records from your school.'
+                        : _attentionSubtitle(
+                          dueFees.first,
+                          'Check the details from your school',
+                        ),
+                action: 'View',
+                onTap:
+                    () => setState(() {
+                      _selectedIndex = 1;
+                      _learnSectionIndex = 2;
+                    }),
+              ),
+              const Divider(height: 20),
+              _v3AttentionRow(
+                icon: Icons.notifications_none_rounded,
+                title:
+                    announcementRows.isEmpty
+                        ? 'School notices'
+                        : '${announcementRows.length} school notice${announcementRows.length == 1 ? '' : 's'}',
+                subtitle:
+                    announcementRows.isEmpty
+                        ? 'New school notices will appear here.'
+                        : announcementRows.first['title']?.toString() ??
+                            'New school update',
+                action: 'View',
+                onTap:
+                    () => setState(() {
+                      _selectedIndex = 1;
+                      _learnSectionIndex = 1;
+                    }),
+              ),
+            ],
+          ),
+        ),
+      if (hasFullAccessChild) _sectionHeading('School modules'),
+      if (hasFullAccessChild)
+        GridView.count(
+          crossAxisCount: MediaQuery.sizeOf(context).width < 370 ? 2 : 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.08,
           children: [
-            _v3AttentionRow(
-              icon: Icons.menu_book_outlined,
-              title:
-                  homeworkRows.isEmpty
-                      ? 'Homework'
-                      : '${homeworkRows.length} homework item${homeworkRows.length == 1 ? '' : 's'}',
-              subtitle:
-                  homeworkRows.isEmpty
-                      ? 'No new homework has been published.'
-                      : _attentionSubtitle(
-                        homeworkRows.first,
-                        'Due date not provided',
-                      ),
-              action: 'View',
-              onTap:
-                  () => setState(() {
-                    _selectedIndex = 1;
-                    _learnSectionIndex = 0;
-                  }),
+            _v3ModuleTile(
+              context,
+              Icons.fact_check_outlined,
+              'Attendance',
+              _sumRows(children, 'attendance'),
+              0,
             ),
-            const Divider(height: 20),
-            _v3AttentionRow(
-              icon: Icons.payments_outlined,
-              title:
-                  dueFees.isEmpty
-                      ? 'Fee records'
-                      : '${dueFees.length} fee item${dueFees.length == 1 ? '' : 's'} to review',
-              subtitle:
-                  dueFees.isEmpty
-                      ? 'See published fee records from your school.'
-                      : _attentionSubtitle(
-                        dueFees.first,
-                        'Check the details from your school',
-                      ),
-              action: 'View',
-              onTap:
-                  () => setState(() {
-                    _selectedIndex = 1;
-                    _learnSectionIndex = 2;
-                  }),
+            _v3ModuleTile(
+              context,
+              Icons.calendar_month_outlined,
+              'Timetable',
+              _sumRows(children, 'timetable'),
+              0,
             ),
-            const Divider(height: 20),
-            _v3AttentionRow(
-              icon: Icons.notifications_none_rounded,
-              title:
-                  announcementRows.isEmpty
-                      ? 'School notices'
-                      : '${announcementRows.length} school notice${announcementRows.length == 1 ? '' : 's'}',
-              subtitle:
-                  announcementRows.isEmpty
-                      ? 'New school notices will appear here.'
-                      : announcementRows.first['title']?.toString() ??
-                          'New school update',
-              action: 'View',
-              onTap:
-                  () => setState(() {
-                    _selectedIndex = 1;
-                    _learnSectionIndex = 1;
-                  }),
+            _v3ModuleTile(
+              context,
+              Icons.menu_book_outlined,
+              'Homework',
+              homeworkRows.length,
+              0,
+            ),
+            _v3ModuleTile(
+              context,
+              Icons.assessment_outlined,
+              'Results',
+              _sumRows(children, 'results'),
+              0,
+            ),
+            _v3ModuleTile(
+              context,
+              Icons.payments_outlined,
+              'Fees',
+              feeRows.length,
+              2,
+            ),
+            _v3ModuleTile(
+              context,
+              Icons.campaign_outlined,
+              'Notices',
+              announcementRows.length,
+              1,
             ),
           ],
         ),
-      ),
-      _sectionHeading('School modules'),
-      GridView.count(
-        crossAxisCount: MediaQuery.sizeOf(context).width < 370 ? 2 : 3,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1.08,
-        children: [
-          _v3ModuleTile(
-            context,
-            Icons.fact_check_outlined,
-            'Attendance',
-            _sumRows(children, 'attendance'),
-            0,
-          ),
-          _v3ModuleTile(
-            context,
-            Icons.calendar_month_outlined,
-            'Timetable',
-            _sumRows(children, 'timetable'),
-            0,
-          ),
-          _v3ModuleTile(
-            context,
-            Icons.menu_book_outlined,
-            'Homework',
-            homeworkRows.length,
-            0,
-          ),
-          _v3ModuleTile(
-            context,
-            Icons.assessment_outlined,
-            'Results',
-            _sumRows(children, 'results'),
-            0,
-          ),
-          _v3ModuleTile(
-            context,
-            Icons.payments_outlined,
-            'Fees',
-            feeRows.length,
-            2,
-          ),
-          _v3ModuleTile(
-            context,
-            Icons.campaign_outlined,
-            'Notices',
-            announcementRows.length,
-            1,
-          ),
-        ],
-      ),
       if (widget.commands.isNotEmpty) ...[
         _sectionHeading('Recent requests'),
         ...widget.commands.take(3).map(_requestCard),
@@ -5813,9 +5818,16 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
             .map((part) => part[0].toUpperCase())
             .join();
     final scheduleOnly = child['accessLevel'] == 'schedule_only';
+    final className = student['className']?.toString().trim() ?? '';
+    final classLabel =
+        className.isEmpty
+            ? ''
+            : RegExp(r'^class\b', caseSensitive: false).hasMatch(className)
+            ? className
+            : 'Class $className';
     final detail = [
-      if (student['className'] != null)
-        'Class ${student['className']}${student['sectionName'] == null ? '' : ' · ${student['sectionName']}'}',
+      if (classLabel.isNotEmpty)
+        '$classLabel${student['sectionName'] == null ? '' : ' · ${student['sectionName']}'}',
       if (student['admissionNo'] != null) 'Admission ${student['admissionNo']}',
     ].join('  ·  ');
     return Card(
@@ -5856,7 +5868,7 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
                       Text(
                         detail.isEmpty
                             ? child['schoolName']?.toString() ?? 'School'
-                            : '$detail  ·  ${child['schoolName'] ?? 'School'}',
+                            : '$detail · ${child['schoolName'] ?? 'School'}',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -5884,7 +5896,7 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
               const Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Schedule-only access',
+                  'Schedule-only access · timetable details only',
                   style: TextStyle(
                     color: Color(0xffe7f0fb),
                     fontSize: 12,
