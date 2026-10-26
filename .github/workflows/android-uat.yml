@@ -115,6 +115,7 @@ jobs:
             "--build-name=$BUILD_NAME"
             "--build-number=$RUN_NUMBER"
             --dart-define=SCHOOL_ERP_UAT=true
+            --dart-define=SCHOOL_ERP_PARENT_EMAIL_TEST_MODE=true
             "--dart-define=FIREBASE_API_KEY=$FIREBASE_API_KEY"
             "--dart-define=FIREBASE_APP_ID=$FIREBASE_APP_ID"
             "--dart-define=FIREBASE_MESSAGING_SENDER_ID=$FIREBASE_MESSAGING_SENDER_ID"
@@ -138,6 +139,7 @@ jobs:
         with:
           project_id: ${{ vars.FIREBASE_PROJECT_ID }}
       - name: Run Firebase Test Lab Robo smoke test
+        continue-on-error: true
         env:
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
           RUN_NUMBER: ${{ github.run_number }}

@@ -23,6 +23,9 @@ import 'package:url_launcher/url_launcher.dart';
 enum MobileRole { teacher, parent }
 
 const _uatDistributionEnabled = bool.fromEnvironment('SCHOOL_ERP_UAT');
+const _parentEmailTestModeEnabled =
+    _uatDistributionEnabled &&
+    bool.fromEnvironment('SCHOOL_ERP_PARENT_EMAIL_TEST_MODE');
 const _appDistributionChannel = MethodChannel('school_erp/app_distribution');
 
 Future<void> launchSchoolErpApp({
@@ -121,6 +124,8 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   bool _working = false;
   bool _signedIn = false;
   bool _hubMode = false;
+  bool _parentDemoMode = false;
+  bool _showSchoolSignIn = false;
   bool _offline = false;
   bool _legacyCacheMatchesAccount = false;
   bool _setupJustCompleted = false;
@@ -1684,7 +1689,163 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     );
   }
 
+  void _startParentEmailTest(String email) {
+    final normalizedEmail = email.trim().toLowerCase();
+    final displayName = normalizedEmail.split('@').first;
+    setState(() {
+      _parentDemoMode = true;
+      _user = {
+        'id': -1,
+        'role': 'parent',
+        'email': normalizedEmail,
+        'displayName': displayName,
+      };
+      _parentChildren = _parentEmailTestChildren();
+      _parentCommands = [];
+      _parentSupportTickets = [];
+      _parentSupportAvailable = false;
+      _parentCacheCleared = false;
+      _signedIn = true;
+      _offline = true;
+      _error = null;
+      _success =
+          'UAT sample mode · synthetic records only. No school server is contacted.';
+    });
+  }
+
+  void _leaveParentEmailTest({bool openSchoolSignIn = false}) {
+    setState(() {
+      _parentDemoMode = false;
+      _showSchoolSignIn = openSchoolSignIn;
+      _signedIn = false;
+      _user = null;
+      _parentChildren = [];
+      _parentCommands = [];
+      _success = null;
+      _error = null;
+    });
+  }
+
+  List<Map<String, dynamic>> _parentEmailTestChildren() {
+    final now = DateTime.now();
+    final today = DateUtils.dateOnly(now).toIso8601String().substring(0, 10);
+    final yesterday = DateUtils.dateOnly(
+      now.subtract(const Duration(days: 1)),
+    ).toIso8601String().substring(0, 10);
+    final tomorrow = DateUtils.dateOnly(
+      now.add(const Duration(days: 1)),
+    ).toIso8601String().substring(0, 10);
+    return [
+      {
+        'studentPublicId': 'demo-student-0001',
+        'schoolName': 'Sample School',
+        'schoolId': 'demo-school',
+        'schoolCalendar': <Map<String, dynamic>>[],
+        'schoolCalendarProjectedAt': now.toUtc().toIso8601String(),
+        'linkStatus': 'linked',
+        'accessLevel': 'full',
+        'projectedAt': now.toUtc().toIso8601String(),
+        'snapshot': {
+          'student': {
+            'fullName': 'Mira Shah',
+            'className': 'Class 3',
+            'sectionName': 'A',
+          },
+          'attendance': [
+            {
+              'date': today,
+              'period': 0,
+              'status': 'present',
+              'statusLabel': 'Present',
+            },
+            {
+              'date': yesterday,
+              'period': 0,
+              'status': 'medical_leave',
+              'statusLabel': 'Medical leave',
+            },
+          ],
+          'timetable': [
+            {
+              'weekday': now.weekday,
+              'period': 1,
+              'startTime': '08:00',
+              'endTime': '08:40',
+              'subjectName': 'Mathematics',
+              'teacherName': 'Rina Patel',
+              'room': 'Room 4',
+            },
+          ],
+          'homework': [
+            {
+              'title': 'Math practice',
+              'dueOn': tomorrow,
+              'details': 'Complete pages 4–5.',
+              'subjectName': 'Mathematics',
+            },
+          ],
+          'announcements': [
+            {
+              'title': 'Library day',
+              'message': 'Bring your library book.',
+              'publishOn': today,
+            },
+          ],
+          'results': <Map<String, dynamic>>[],
+          'fees': [
+            {'feeName': 'Tuition', 'amount': 5000, 'status': 'due'},
+          ],
+        },
+      },
+    ];
+  }
+
+  Widget _buildParentEmailTestWorkspace() => HostedParentNavigation(
+    role: MobileRole.parent,
+    user: _user!,
+    api: _api,
+    children: _parentChildren,
+    commands: const [],
+    supportTickets: const [],
+    supportAvailable: false,
+    cacheCleared: false,
+    analyticsConsent: false,
+    isOffline: true,
+    success:
+        'UAT sample mode · synthetic records only. No school server is contacted.',
+    working: false,
+    showWelcomeCard: true,
+    onEnableNotifications: () {},
+    notificationPreferences: _defaultParentNotificationPreferences,
+    onNotificationPreferenceChanged: (_, _) {},
+    textScale: 1,
+    onTextScaleChanged: (_) {},
+    onConsentChanged: (_) {},
+    onRefresh: () {},
+    onSubmitRequest: (_) {},
+    onSubmitSupportTicket: (_) async {},
+    onClearCache: () async {},
+    onSignOut: () => _leaveParentEmailTest(),
+    onChangeServer: () => _leaveParentEmailTest(openSchoolSignIn: true),
+    biometricEnabled: false,
+    onBiometricChanged: (_) {},
+    notificationRevision: 0,
+    notificationType: null,
+    notificationOpened: false,
+  );
+
   Widget _buildBody() {
+    if (_parentEmailTestModeEnabled &&
+        widget.role == MobileRole.parent &&
+        !_showSchoolSignIn) {
+      if (_parentDemoMode && _user != null) {
+        return _buildParentEmailTestWorkspace();
+      }
+      return _ParentEmailTestEntry(
+        onOpenSample: _startParentEmailTest,
+        onSchoolSignIn: () => _leaveParentEmailTest(openSchoolSignIn: true),
+      );
+    }
     if (_biometricLocked) {
       return _BiometricUnlockView(
         working: _working,
@@ -4157,6 +4318,75 @@ class _ParentLoginSupportDialogState extends State<_ParentLoginSupportDialog> {
         label: const Text('Send to operator'),
       ),
     ],
+  );
+}
+
+class _ParentEmailTestEntry extends StatefulWidget {
+  const _ParentEmailTestEntry({
+    required this.onOpenSample,
+    required this.onSchoolSignIn,
+  });
+
+  final ValueChanged<String> onOpenSample;
+  final VoidCallback onSchoolSignIn;
+
+  @override
+  State<_ParentEmailTestEntry> createState() => _ParentEmailTestEntryState();
+}
+
+class _ParentEmailTestEntryState extends State<_ParentEmailTestEntry> {
+  final _formKey = GlobalKey<FormState>();
+  final _email = TextEditingController();
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _Page(
+    role: MobileRole.parent,
+    child: _CardBody(
+      title: 'Test the Parent app',
+      subtitle:
+          'Open the app with sample data while Google sign-in is being fixed.',
+      children: [
+        const _InfoBanner(
+          text:
+              'UAT sample mode only. The email is used as a display label; sample student records are synthetic and no school server is contacted.',
+        ),
+        const SizedBox(height: 14),
+        Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                autocorrect: false,
+                decoration: const InputDecoration(labelText: 'Email address'),
+                validator: _emailValidator,
+              ),
+              const SizedBox(height: 12),
+              _PrimaryButton(
+                label: 'Open sample Parent app',
+                working: false,
+                onPressed: () {
+                  if (_formKey.currentState?.validate() != true) return;
+                  widget.onOpenSample(_email.text);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: widget.onSchoolSignIn,
+          child: const Text('Use normal school sign-in'),
+        ),
+      ],
+    ),
   );
 }
 
