@@ -523,6 +523,8 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   Future<void> _pairWithCode(String value) async {
     var hubTrustConfigured = false;
     var pairingConfirmed = false;
+    String? pairingHubUrl;
+    String? pairingSchoolId;
     setState(() {
       _working = true;
       _error = null;
@@ -541,6 +543,8 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       final hubUrl = decoded['hubUrl']?.toString() ?? '';
       final fingerprint = decoded['certificateFingerprint']?.toString() ?? '';
       final schoolId = decoded['schoolId']?.toString() ?? '';
+      pairingHubUrl = hubUrl;
+      pairingSchoolId = schoolId;
       final expiresAt = DateTime.tryParse(
         decoded['expiresAt']?.toString() ?? '',
       );
@@ -567,22 +571,16 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
           'The Hub did not confirm this device pairing.',
         );
       pairingConfirmed = true;
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(_apiUrlKey, hubUrl);
-      await preferences.setString(_hubSchoolIdKey, schoolId);
-      await preferences.setBool(_hubModeKey, true);
-      await _api.clearToken();
-      await _api.clearCachedIdentity();
-      setState(() {
-        _hubMode = true;
-        _schoolId = schoolId;
-        _setupStatus = null;
-        _signedIn = false;
-        _user = null;
-        _success =
-            'This device is paired with the school Hub. Sign in with the account created by your school.';
-      });
+      await _completeHubPairing(hubUrl, schoolId);
     } on ApiException catch (error) {
+      // The Hub rejects reuse of a pairing code when this device ID is already
+      // enrolled. That response confirms the phone belongs to this school; it
+      // must restore the saved Hub connection and continue to sign-in.
+      if (hubTrustConfigured && error.code == 'DEVICE_ALREADY_PAIRED') {
+        pairingConfirmed = true;
+        await _completeHubPairing(pairingHubUrl!, pairingSchoolId!);
+        return;
+      }
       if (hubTrustConfigured && !pairingConfirmed) {
         await _resetFailedHubPairing();
       }
@@ -608,6 +606,24 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     } finally {
       if (mounted) setState(() => _working = false);
     }
+  }
+
+  Future<void> _completeHubPairing(String hubUrl, String schoolId) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_apiUrlKey, hubUrl);
+    await preferences.setString(_hubSchoolIdKey, schoolId);
+    await preferences.setBool(_hubModeKey, true);
+    await _api.clearToken();
+    await _api.clearCachedIdentity();
+    setState(() {
+      _hubMode = true;
+      _schoolId = schoolId;
+      _setupStatus = null;
+      _signedIn = false;
+      _user = null;
+      _success =
+          'This device is paired with the school Hub. Sign in with the account created by your school.';
+    });
   }
 
   Future<void> _resetFailedHubPairing() async {

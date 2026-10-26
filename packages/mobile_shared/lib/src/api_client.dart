@@ -15,10 +15,11 @@ const schoolErpAppVersion = String.fromEnvironment(
 );
 
 class ApiException implements Exception {
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(this.message, {this.statusCode, this.code});
 
   final String message;
   final int? statusCode;
+  final String? code;
 
   @override
   String toString() => message;
@@ -448,6 +449,7 @@ class ApiClient implements LocalSyncApi {
       throw ApiException(
         _safeErrorMessage(decoded, response.statusCode),
         statusCode: response.statusCode,
+        code: _safeErrorCode(decoded),
       );
     } on ApiException {
       rethrow;
@@ -492,5 +494,15 @@ class ApiClient implements LocalSyncApi {
       409 => 'School setup has already been completed.',
       _ => 'The server could not complete this request. Please try again.',
     };
+  }
+
+  String? _safeErrorCode(Object? decoded) {
+    if (decoded is Map<String, dynamic>) {
+      final apiError = decoded['error'];
+      if (apiError is Map && apiError['code'] is String) {
+        return apiError['code'] as String;
+      }
+    }
+    return null;
   }
 }
