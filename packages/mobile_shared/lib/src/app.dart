@@ -1767,6 +1767,28 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       );
     }
     if (_setupStatus?['access_ready'] != true) {
+      if (widget.role == MobileRole.parent) {
+        return _Page(
+          role: widget.role,
+          child: _CardBody(
+            title: 'School access is not active yet',
+            subtitle:
+                'The school administrator needs to finish server activation before parents can sign in. The activation code is for the administrator; you do not need to enter it.',
+            error: _error,
+            children: [
+              _PrimaryButton(
+                label: 'Check again',
+                working: _working,
+                onPressed: _refresh,
+              ),
+              TextButton(
+                onPressed: _changeServer,
+                child: const Text('Use another school server'),
+              ),
+            ],
+          ),
+        );
+      }
       return _GateView(
         role: widget.role,
         reason:
