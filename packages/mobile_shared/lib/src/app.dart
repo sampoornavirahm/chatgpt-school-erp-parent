@@ -1848,31 +1848,31 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
 final _theme = ThemeData(
   useMaterial3: true,
   colorScheme: ColorScheme.fromSeed(
-    seedColor: const Color(0xff2467ed),
+    seedColor: const Color(0xff1d5fa6),
     brightness: Brightness.light,
   ),
   scaffoldBackgroundColor: Colors.transparent,
   inputDecorationTheme: InputDecorationTheme(
     filled: true,
-    fillColor: const Color(0xfff7f9fc),
+    fillColor: const Color(0xfff4f6f8),
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(13),
+      borderRadius: BorderRadius.circular(12),
       borderSide: BorderSide.none,
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(13),
+      borderRadius: BorderRadius.circular(12),
       borderSide: const BorderSide(color: Color(0xffe3e9f1)),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(13),
-      borderSide: const BorderSide(color: Color(0xff2467ed), width: 1.5),
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: Color(0xff1d5fa6), width: 1.5),
     ),
     contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
   ),
   cardTheme: CardThemeData(
     color: Colors.white,
     elevation: 0,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
   ),
 );
 
@@ -5157,6 +5157,7 @@ class HostedParentNavigation extends StatefulWidget {
 
 class _HostedParentNavigationState extends State<HostedParentNavigation> {
   int _selectedIndex = 0;
+  int _learnSectionIndex = 0;
   late int _handledNotificationRevision;
   bool _showWeeklyTimetable = false;
   String? _selectedChildId;
@@ -5177,9 +5178,13 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
         _selectedIndex = switch (widget.notificationType) {
           'schedule_update' => 1,
           'homework_update' => 1,
-          'school_notice' => 2,
+          'school_notice' => 1,
           _ => _selectedIndex,
         };
+        if (widget.notificationType == 'school_notice') {
+          _learnSectionIndex = 1;
+          _selectedIndex = 1;
+        }
       }
     }
     if (_selectedChildId != null &&
@@ -5315,44 +5320,70 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: _Page(
-      role: widget.role,
+    backgroundColor: const Color(0xfff4f6f8),
+    body: SafeArea(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (widget.showWelcomeCard) ...[
-            Text(
-              'Hello, ${widget.user['name'] ?? widget.role.title}',
-              style: const TextStyle(
-                fontSize: 25,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: Color(0xff122238),
+          _parentV3BrandBar(context),
+          if (widget.error != null || widget.success != null || widget.isOffline)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Column(
+                children: [
+                  if (widget.error != null)
+                    _MessageBanner(text: widget.error!, error: true),
+                  if (widget.success != null)
+                    _MessageBanner(text: widget.success!, error: false),
+                  if (widget.isOffline)
+                    const _MessageBanner(
+                      text: 'Offline · showing the last saved school information.',
+                      error: false,
+                    ),
+                ],
               ),
             ),
-            const SizedBox(height: 5),
-            const Text(
-              'Your family’s school updates, together.',
-              style: TextStyle(color: Color(0xff68778b)),
+          if (_selectedIndex == 1 && widget.children.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _childSelector(),
             ),
-            const SizedBox(height: 16),
-          ],
-          if (widget.error != null)
-            _MessageBanner(text: widget.error!, error: true),
-          if (widget.success != null)
-            _MessageBanner(text: widget.success!, error: false),
-          if (widget.isOffline)
-            const _MessageBanner(
-              text: 'Offline · showing the last saved school information.',
-              error: false,
+          Expanded(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                  children: [
+                    if (widget.showWelcomeCard && _selectedIndex == 0) ...[
+                      Text(
+                        'Hello, ${widget.user['name'] ?? widget.role.title}',
+                        style: const TextStyle(
+                          fontSize: 25,
+                          height: 1.2,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xff122238),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      const Text(
+                        'Your family’s school day, at a glance.',
+                        style: TextStyle(color: Color(0xff68778b)),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_selectedIndex == 0 && widget.children.isNotEmpty) ...[
+                      _childSelector(),
+                      const SizedBox(height: 8),
+                    ],
+                    if (_selectedIndex == 0) ..._parentV3Home(context),
+                    if (_selectedIndex == 1) ..._parentV3Learn(context),
+                    if (_selectedIndex == 2) ..._parentV3Shop(context),
+                    if (_selectedIndex == 3) ..._exploreContent(context),
+                  ],
+                ),
+              ),
             ),
-          _ActiveSessionsButton(api: widget.api, onSignOut: widget.onSignOut),
-          if (_selectedIndex >= 1 && _selectedIndex <= 3) ...[
-            const SizedBox(height: 8),
-            _childSelector(),
-          ],
-          const SizedBox(height: 12),
-          ..._tabContent(context),
+          ),
         ],
       ),
     ),
@@ -5360,42 +5391,382 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
       selectedIndex: _selectedIndex,
       onDestinationSelected: (index) => setState(() => _selectedIndex = index),
       destinations: const [
-        NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
-        NavigationDestination(
-          icon: Icon(Icons.menu_book_outlined),
-          label: 'Learning',
-        ),
-        NavigationDestination(icon: Icon(Icons.inbox_outlined), label: 'Inbox'),
-        NavigationDestination(
-          icon: Icon(Icons.payments_outlined),
-          label: 'Payments',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.explore_outlined),
-          label: 'Explore',
-        ),
+        NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
+        NavigationDestination(icon: Icon(Icons.school_outlined), selectedIcon: Icon(Icons.school), label: 'Learn+'),
+        NavigationDestination(icon: Icon(Icons.shopping_bag_outlined), selectedIcon: Icon(Icons.shopping_bag), label: 'Shop'),
+        NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
       ],
     ),
   );
 
-  Widget _childSelector() => DropdownButtonFormField<String?>(
-    initialValue: _selectedChildId,
-    isExpanded: true,
-    decoration: const InputDecoration(labelText: 'Showing information for'),
-    items: [
-      const DropdownMenuItem<String?>(value: null, child: Text('All children')),
-      ...widget.children.map((child) {
-        final student = _student(child);
-        return DropdownMenuItem<String?>(
-          value: child['studentPublicId']?.toString(),
-          child: Text(
-            '${student['fullName'] ?? 'Child'} · ${child['schoolName'] ?? 'School'} · ${student['className'] ?? ''} ${student['sectionName'] ?? ''}',
-            overflow: TextOverflow.ellipsis,
+  Widget _parentV3BrandBar(BuildContext context) {
+    final schools = widget.children
+        .map((child) => child['schoolName']?.toString())
+        .whereType<String>()
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final school = schools.isEmpty
+        ? 'Family account'
+        : schools.length == 1
+        ? schools.first
+        : 'Multiple schools';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 10, 14, 8),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xff1d5fa6),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: const Icon(Icons.school_rounded, color: Colors.white, size: 21),
           ),
-        );
-      }),
+          const SizedBox(width: 10),
+          Text.rich(
+            TextSpan(children: [
+              const TextSpan(text: 'IQ', style: TextStyle(color: Color(0xff1d5fa6))),
+              TextSpan(text: 'naut', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+            ]),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -.4),
+          ),
+          Container(width: 1, height: 22, margin: const EdgeInsets.symmetric(horizontal: 10), color: const Color(0xffdce3eb)),
+          Expanded(child: Text(school, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xff536173)))),
+          IconButton(
+            tooltip: widget.isOffline ? 'Offline' : 'Refresh school information',
+            onPressed: widget.working ? null : widget.onRefresh,
+            icon: Icon(widget.isOffline ? Icons.cloud_off_outlined : Icons.sync_rounded, color: widget.isOffline ? const Color(0xffa76300) : const Color(0xff1d5fa6)),
+          ),
+          IconButton(
+            tooltip: 'Settings and account',
+            onPressed: () => setState(() => _selectedIndex = 3),
+            icon: const CircleAvatar(
+              radius: 16,
+              backgroundColor: Color(0xffdceafe),
+              child: Icon(Icons.person_outline, size: 19, color: Color(0xff1d5fa6)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _childSelector() => SizedBox(
+    height: 48,
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      children: [
+        _childPill(label: 'All children', selected: _selectedChildId == null, onTap: () => setState(() => _selectedChildId = null)),
+        for (final child in widget.children)
+          _childPill(
+            label: _student(child)['fullName']?.toString().split(' ').first ?? 'Child',
+            selected: _selectedChildId == child['studentPublicId']?.toString(),
+            onTap: () => setState(() => _selectedChildId = child['studentPublicId']?.toString()),
+          ),
+      ],
+    ),
+  );
+
+  Widget _childPill({required String label, required bool selected, required VoidCallback onTap}) => Padding(
+    padding: const EdgeInsets.only(right: 8),
+    child: ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      showCheckmark: false,
+      labelStyle: TextStyle(fontWeight: FontWeight.w700, color: selected ? const Color(0xff1d5fa6) : const Color(0xff435064)),
+      backgroundColor: Colors.white,
+      selectedColor: const Color(0xffe4efff),
+      side: BorderSide(color: selected ? const Color(0xff1d5fa6) : const Color(0xffe1e7ef)),
+      shape: const StadiumBorder(),
+    ),
+  );
+
+  List<Widget> _parentV3Home(BuildContext context) {
+    final children = _visibleChildren;
+    if (widget.children.isEmpty) {
+      return [
+        _sectionHeading(widget.cacheCleared ? 'School information removed' : 'Link your children'),
+        _v3Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(widget.cacheCleared ? Icons.cloud_download_outlined : Icons.family_restroom_outlined, size: 34, color: const Color(0xff1d5fa6)),
+              const SizedBox(height: 10),
+              Text(
+                widget.cacheCleared
+                    ? 'Your saved school information was removed from this phone. Refresh to download it again.'
+                    : 'No child is linked to this account yet. Ask the school office to connect your parent account.',
+                style: const TextStyle(height: 1.45, color: Color(0xff536173)),
+              ),
+              if (widget.cacheCleared) ...[
+                const SizedBox(height: 12),
+                FilledButton.icon(onPressed: widget.working ? null : widget.onRefresh, icon: const Icon(Icons.sync), label: const Text('Download school information')),
+              ],
+            ],
+          ),
+        ),
+        _sectionHeading('Your family'),
+        _v3Card(child: Text('When the school links a child to this account, attendance, timetable, homework, results and notices will appear here.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.45))),
+      ];
+    }
+
+    final feeRows = <Map<String, dynamic>>[];
+    final homeworkRows = <Map<String, dynamic>>[];
+    final announcementRows = <Map<String, dynamic>>[];
+    for (final child in children) {
+      if (child['accessLevel'] == 'schedule_only') continue;
+      feeRows.addAll(_rows(child, 'fees').map((row) => {...row, '_school': child['schoolName']}));
+      homeworkRows.addAll(_rows(child, 'homework').map((row) => {...row, '_student': _student(child)['fullName']}));
+      announcementRows.addAll(_rows(child, 'announcements').map((row) => {...row, '_school': child['schoolName']}));
+    }
+    final dueFees = feeRows.where((row) {
+      final status = row['status']?.toString().toLowerCase() ?? '';
+      return status.isNotEmpty && !{'paid', 'cleared', 'waived', 'refunded'}.contains(status);
+    }).toList();
+
+    return [
+      _sectionHeading('Your children'),
+      for (final child in children) _parentV3ChildCard(context, child),
+      _sectionHeading('Needs your attention'),
+      _v3Card(
+        child: Column(
+          children: [
+            _v3AttentionRow(
+              icon: Icons.menu_book_outlined,
+              title: homeworkRows.isEmpty ? 'Homework' : '${homeworkRows.length} homework item${homeworkRows.length == 1 ? '' : 's'}',
+              subtitle: homeworkRows.isEmpty ? 'No new homework has been published.' : _attentionSubtitle(homeworkRows.first, 'Due date not provided'),
+              action: 'View',
+              onTap: () => setState(() { _selectedIndex = 1; _learnSectionIndex = 0; }),
+            ),
+            const Divider(height: 20),
+            _v3AttentionRow(
+              icon: Icons.payments_outlined,
+              title: dueFees.isEmpty ? 'Fee records' : '${dueFees.length} fee item${dueFees.length == 1 ? '' : 's'} to review',
+              subtitle: dueFees.isEmpty ? 'See published fee records from your school.' : _attentionSubtitle(dueFees.first, 'Check the details from your school'),
+              action: 'View',
+              onTap: () => setState(() { _selectedIndex = 1; _learnSectionIndex = 2; }),
+            ),
+            const Divider(height: 20),
+            _v3AttentionRow(
+              icon: Icons.notifications_none_rounded,
+              title: announcementRows.isEmpty ? 'School notices' : '${announcementRows.length} school notice${announcementRows.length == 1 ? '' : 's'}',
+              subtitle: announcementRows.isEmpty ? 'New school notices will appear here.' : announcementRows.first['title']?.toString() ?? 'New school update',
+              action: 'View',
+              onTap: () => setState(() { _selectedIndex = 1; _learnSectionIndex = 1; }),
+            ),
+          ],
+        ),
+      ),
+      _sectionHeading('School modules'),
+      GridView.count(
+        crossAxisCount: MediaQuery.sizeOf(context).width < 370 ? 2 : 3,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 1.08,
+        children: [
+          _v3ModuleTile(context, Icons.fact_check_outlined, 'Attendance', _sumRows(children, 'attendance'), 0),
+          _v3ModuleTile(context, Icons.calendar_month_outlined, 'Timetable', _sumRows(children, 'timetable'), 0),
+          _v3ModuleTile(context, Icons.menu_book_outlined, 'Homework', homeworkRows.length, 0),
+          _v3ModuleTile(context, Icons.assessment_outlined, 'Results', _sumRows(children, 'results'), 0),
+          _v3ModuleTile(context, Icons.payments_outlined, 'Fees', feeRows.length, 2),
+          _v3ModuleTile(context, Icons.campaign_outlined, 'Notices', announcementRows.length, 1),
+        ],
+      ),
+      if (widget.commands.isNotEmpty) ...[
+        _sectionHeading('Recent requests'),
+        ...widget.commands.take(3).map(_requestCard),
+      ],
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: OutlinedButton.icon(
+          onPressed: widget.working ? null : widget.onRefresh,
+          icon: widget.working ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.sync),
+          label: Text(widget.working ? 'Refreshing…' : 'Refresh school information'),
+        ),
+      ),
+    ];
+  }
+
+  Widget _parentV3ChildCard(BuildContext context, Map<String, dynamic> child) {
+    final student = _student(child);
+    final name = student['fullName']?.toString() ?? student['name']?.toString() ?? 'Linked child';
+    final shortName = name.trim().split(RegExp(r'\s+')).first;
+    final initials = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).take(2).map((part) => part[0].toUpperCase()).join();
+    final scheduleOnly = child['accessLevel'] == 'schedule_only';
+    final detail = [
+      if (student['className'] != null) 'Class ${student['className']}${student['sectionName'] == null ? '' : ' · ${student['sectionName']}'}',
+      if (student['admissionNo'] != null) 'Admission ${student['admissionNo']}',
+    ].join('  ·  ');
+    return Card(
+      margin: const EdgeInsets.only(bottom: 9),
+      color: const Color(0xff1d5fa6),
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
+      child: Padding(
+        padding: const EdgeInsets.all(15),
+        child: Column(
+        children: [
+          Row(
+            children: [
+              CircleAvatar(radius: 25, backgroundColor: Colors.white, child: Text(initials.isEmpty ? 'S' : initials, style: const TextStyle(color: Color(0xff1d5fa6), fontWeight: FontWeight.w800))),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
+                  Text(detail.isEmpty ? child['schoolName']?.toString() ?? 'School' : '$detail  ·  ${child['schoolName'] ?? 'School'}', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Color(0xffe7f0fb))),
+                ]),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xffe7f0fb)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (!scheduleOnly)
+            Row(
+              children: [
+                _v3Metric('Attendance', _rows(child, 'attendance').length),
+                _v3Metric('Homework', _rows(child, 'homework').length),
+                _v3Metric('Results', _rows(child, 'results').length),
+                _v3Metric('Fees', _rows(child, 'fees').length),
+              ],
+            )
+          else
+            const Align(alignment: Alignment.centerLeft, child: Text('Schedule-only access', style: TextStyle(color: Color(0xffe7f0fb), fontSize: 12, fontWeight: FontWeight.w700))),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              Expanded(child: Text(_syncLabel(child['projectedAt']), style: const TextStyle(fontSize: 11, color: Color(0xffe7f0fb)))),
+              if (!scheduleOnly)
+                TextButton.icon(
+                  onPressed: widget.working ? null : () => _requestLeave(context, child),
+                  icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+                  label: Text('Request · $shortName'),
+                ),
+            ],
+          ),
+        ],
+        ),
+      ),
+    );
+  }
+
+  Widget _v3Metric(String label, int value) => Expanded(
+    child: Container(
+      margin: const EdgeInsets.only(right: 5),
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 3),
+      decoration: BoxDecoration(color: const Color(0xfff4f7fb), borderRadius: BorderRadius.circular(10)),
+      child: Column(children: [Text('$value', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xff1d5fa6))), Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Color(0xff68778b)))]),
+    ),
+  );
+
+  int _sumRows(List<Map<String, dynamic>> children, String key) =>
+      children.fold<int>(0, (total, child) {
+        if (child['accessLevel'] == 'schedule_only' && key != 'timetable') {
+          return total;
+        }
+        return total + _rows(child, key).length;
+      });
+
+  String _attentionSubtitle(Map<String, dynamic> row, String fallback) {
+    final parts = <String>[];
+    if (row['_student']?.toString().isNotEmpty == true) parts.add(row['_student'].toString());
+    if (row['_school']?.toString().isNotEmpty == true) parts.add(row['_school'].toString());
+    if (row['dueOn']?.toString().isNotEmpty == true) parts.add('Due ${row['dueOn']}');
+    if (row['amount'] != null) parts.add('₹${row['amount']}');
+    if (row['status']?.toString().isNotEmpty == true) parts.add(row['status'].toString());
+    return parts.isEmpty ? fallback : parts.join(' · ');
+  }
+
+  Widget _v3AttentionRow({required IconData icon, required String title, required String subtitle, required String action, required VoidCallback onTap}) => Row(
+    children: [
+      CircleAvatar(radius: 18, backgroundColor: const Color(0xffe8f0fa), child: Icon(icon, size: 19, color: const Color(0xff1d5fa6))),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)), Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: Color(0xff68778b)))])),
+      TextButton(onPressed: onTap, child: Text(action)),
     ],
-    onChanged: (value) => setState(() => _selectedChildId = value),
+  );
+
+  Widget _v3ModuleTile(BuildContext context, IconData icon, String label, int count, int destination) => Material(
+    color: Colors.white,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: Color(0xffe3e8ee))),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => setState(() { _selectedIndex = 1; _learnSectionIndex = destination; }),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          CircleAvatar(radius: 20, backgroundColor: const Color(0xffe8f0fa), child: Icon(icon, size: 21, color: const Color(0xff1d5fa6))),
+          const SizedBox(height: 6),
+          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+          Text('$count record${count == 1 ? '' : 's'}', style: const TextStyle(fontSize: 10.5, color: Color(0xff68778b))),
+        ]),
+      ),
+    ),
+  );
+
+  List<Widget> _parentV3Learn(BuildContext context) {
+    if (widget.children.isEmpty) return _parentV3Home(context);
+    return [
+      const Text('Learn+', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+      const SizedBox(height: 5),
+      const Text('School-day information shared for your linked children.', style: TextStyle(color: Color(0xff68778b))),
+      const SizedBox(height: 10),
+      SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(value: 0, icon: Icon(Icons.calendar_today_outlined), label: Text('School day')),
+          ButtonSegment(value: 1, icon: Icon(Icons.inbox_outlined), label: Text('Notices')),
+          ButtonSegment(value: 2, icon: Icon(Icons.payments_outlined), label: Text('Fees')),
+        ],
+        selected: {_learnSectionIndex},
+        onSelectionChanged: (selection) => setState(() => _learnSectionIndex = selection.first),
+      ),
+      const SizedBox(height: 10),
+      if (_learnSectionIndex == 0) ..._learningContent(context),
+      if (_learnSectionIndex == 1) ..._inboxContent(context),
+      if (_learnSectionIndex == 2) ..._paymentsContent(context),
+    ];
+  }
+
+  List<Widget> _parentV3Shop(BuildContext context) => [
+    const Text('Shop', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+    const SizedBox(height: 5),
+    const Text('School-approved products and services.', style: TextStyle(color: Color(0xff68778b))),
+    const SizedBox(height: 14),
+    _v3Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 146,
+            width: double.infinity,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: const Color(0xffeef4fb), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.storefront_outlined, size: 52, color: Color(0xff1d5fa6)),
+          ),
+          const SizedBox(height: 14),
+          const Text('Your school shop is not connected yet', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          const Text('When your school enables its catalogue, approved uniforms, books and supplies will appear here. No purchases or payments are processed in this app today.', style: TextStyle(color: Color(0xff68778b), height: 1.45)),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(onPressed: () => setState(() { _selectedIndex = 1; _learnSectionIndex = 2; }), icon: const Icon(Icons.receipt_long_outlined), label: const Text('View school fee records')),
+            FilledButton.tonalIcon(onPressed: () => setState(() => _selectedIndex = 3), icon: const Icon(Icons.support_agent_outlined), label: const Text('Get help')),
+          ]),
+        ],
+      ),
+    ),
+  ];
+
+  Widget _v3Card({required Widget child, EdgeInsets margin = const EdgeInsets.only(bottom: 10)}) => Card(
+    margin: margin,
+    color: Colors.white,
+    elevation: 0,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Color(0xffe3e8ee))),
+    child: Padding(padding: const EdgeInsets.all(14), child: child),
   );
 
   List<Widget> _tabContent(BuildContext context) {
@@ -5791,6 +6162,11 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
   ];
 
   List<Widget> _exploreContent(BuildContext context) => [
+    const Text('Settings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+    const SizedBox(height: 5),
+    Text(widget.user['email']?.toString() ?? 'Parent account', style: const TextStyle(color: Color(0xff68778b))),
+    const SizedBox(height: 8),
+    _ActiveSessionsButton(api: widget.api, onSignOut: widget.onSignOut),
     _sectionHeading('Account and preferences'),
     Text('Text size · ${(widget.textScale * 100).round()}%'),
     Slider.adaptive(
@@ -5862,6 +6238,31 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
     _ConsentRow(
       value: widget.analyticsConsent,
       onChanged: widget.onConsentChanged,
+    ),
+    Card(
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      color: Colors.white,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Color(0xffe3e8ee))),
+      child: ExpansionTile(
+        leading: const Icon(Icons.cloud_outlined, color: Color(0xff1d5fa6)),
+        title: const Text('Firebase services', style: TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(widget.analyticsConsent && FirebaseServices.ready ? 'Optional diagnostics are enabled' : 'Optional diagnostics are off'),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        children: [
+          _serviceStatus('Google sign-in', 'Used to verify your parent account', true),
+          _serviceStatus('FCM notifications', 'Firebase Messaging is available; phone permission is still required', FirebaseServices.ready, state: FirebaseServices.ready ? 'Ready' : 'Unavailable'),
+          _serviceStatus('Analytics', 'Anonymous app usage events', widget.analyticsConsent && FirebaseServices.ready),
+          _serviceStatus('Crashlytics', 'Crash reports for diagnosing app failures', widget.analyticsConsent && FirebaseServices.ready),
+          _serviceStatus('Performance Monitoring', 'App and school-server response timings', widget.analyticsConsent && FirebaseServices.ready),
+          _serviceStatus('In-App Messaging', 'Optional messages inside the app', widget.analyticsConsent && FirebaseServices.ready),
+          _serviceStatus('Remote Config', 'Optional app settings fetched after diagnostics consent', widget.analyticsConsent && FirebaseServices.ready),
+          _serviceStatus('App Check', 'Not configured in this app build', false, state: 'Not configured'),
+          _serviceStatus('Firestore / Realtime Database / Hosting / AI Logic', 'Not used by the Parents app in this build', false, state: 'Not used'),
+          const SizedBox(height: 6),
+          const Text('Turning diagnostics off disables collection for Analytics, Crashlytics, Performance Monitoring and In-App Messaging. School records and sign-in continue to work.', style: TextStyle(fontSize: 12, height: 1.4, color: Color(0xff68778b))),
+        ],
+      ),
     ),
     ListTile(
       contentPadding: EdgeInsets.zero,
@@ -5939,16 +6340,25 @@ class _HostedParentNavigationState extends State<HostedParentNavigation> {
       ...widget.supportTickets.map(_supportTicketCard),
     ],
     const SizedBox(height: 12),
-    Text(
-      widget.user['email']?.toString() ?? '',
-      style: const TextStyle(fontSize: 12, color: Color(0xff6c7a8e)),
-    ),
     TextButton(
       onPressed: widget.onChangeServer,
       child: const Text('Change school server'),
     ),
     TextButton(onPressed: widget.onSignOut, child: const Text('Sign out')),
   ];
+
+  Widget _serviceStatus(String name, String detail, bool enabled, {String? state}) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(enabled ? Icons.check_circle_outline : Icons.remove_circle_outline, size: 18, color: enabled ? const Color(0xff24804a) : const Color(0xff8994a3)),
+        const SizedBox(width: 9),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)), Text(detail, style: const TextStyle(fontSize: 11.5, color: Color(0xff68778b)))])),
+        Text(state ?? (enabled ? 'On' : 'Off'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: enabled ? const Color(0xff24804a) : const Color(0xff68778b))),
+      ],
+    ),
+  );
 
   Widget _sectionHeading(String title) => Padding(
     padding: const EdgeInsets.only(top: 8, bottom: 6),
@@ -6826,9 +7236,9 @@ class _ConsentRow extends StatelessWidget {
       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
     ),
     subtitle: const Text(
-      'Optional. Shares basic usage events, crash reports and performance '
-      'timings with Firebase. Student names, records and message contents are '
-      'not attached.',
+      'Optional. Enables Firebase Analytics, Crashlytics, Performance '
+      'Monitoring and In-App Messaging. Student names, school records and '
+      'message contents are not attached.',
       style: TextStyle(fontSize: 11.5),
     ),
   );
