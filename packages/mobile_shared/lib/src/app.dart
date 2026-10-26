@@ -521,13 +521,15 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
   }
 
   Future<void> _pairWithCode(String value) async {
+    var hubTrustConfigured = false;
+    var pairingConfirmed = false;
     setState(() {
       _working = true;
       _error = null;
       _success = null;
     });
     try {
-      final code = value.trim();
+      final code = value.replaceAll(RegExp(r'\s+'), '');
       if (!code.startsWith('PAIR1.'))
         throw const ApiException(
           'Paste the one-time pairing code from the school administrator.',
@@ -548,10 +550,9 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
           !uri.path.endsWith('/api/v1') ||
           !RegExp(r'^sha256:[a-f0-9]{64}$').hasMatch(fingerprint) ||
           schoolId.isEmpty ||
-          expiresAt == null ||
-          !expiresAt.isAfter(DateTime.now().toUtc())) {
+          expiresAt == null) {
         throw const ApiException(
-          'This pairing code is invalid or expired. Ask the school administrator for a new one.',
+          'The copied pairing code is incomplete or malformed. Copy a fresh code from the school Hub.',
         );
       }
       await _api.configureLocalHub(
@@ -559,17 +560,19 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
         fingerprint: fingerprint,
         platform: Platform.isIOS ? 'ios' : 'android',
       );
+      hubTrustConfigured = true;
+      final paired = await _api.redeemPairingCode(code);
+      if (paired['paired'] != true)
+        throw const ApiException(
+          'The Hub did not confirm this device pairing.',
+        );
+      pairingConfirmed = true;
       final preferences = await SharedPreferences.getInstance();
       await preferences.setString(_apiUrlKey, hubUrl);
       await preferences.setString(_hubSchoolIdKey, schoolId);
       await preferences.setBool(_hubModeKey, true);
       await _api.clearToken();
       await _api.clearCachedIdentity();
-      final paired = await _api.redeemPairingCode(code);
-      if (paired['paired'] != true)
-        throw const ApiException(
-          'The Hub did not confirm this device pairing.',
-        );
       setState(() {
         _hubMode = true;
         _schoolId = schoolId;
@@ -580,14 +583,23 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
             'This device is paired with the school Hub. Sign in with the account created by your school.';
       });
     } on ApiException catch (error) {
+      if (hubTrustConfigured && !pairingConfirmed) {
+        await _resetFailedHubPairing();
+      }
       setState(() => _error = error.message);
     } on FormatException {
+      if (hubTrustConfigured && !pairingConfirmed) {
+        await _resetFailedHubPairing();
+      }
       setState(
         () =>
             _error =
                 'The pairing code could not be read. Copy it again and try once more.',
       );
     } catch (_) {
+      if (hubTrustConfigured && !pairingConfirmed) {
+        await _resetFailedHubPairing();
+      }
       setState(
         () =>
             _error =
@@ -595,6 +607,15 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       );
     } finally {
       if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _resetFailedHubPairing() async {
+    _api.baseUrl = null;
+    try {
+      await _api.clearLocalHubTrust();
+    } catch (_) {
+      // Keep the pairing screen available even if secure-storage cleanup fails.
     }
   }
 
@@ -2017,6 +2038,8 @@ class _ServerAddressViewState extends State<_ServerAddressView> {
           minLines: 2,
           maxLines: 4,
           autocorrect: false,
+          enableSuggestions: false,
+          textCapitalization: TextCapitalization.none,
           decoration: const InputDecoration(
             labelText: 'One-time pairing code',
             hintText: 'PAIR1…',
