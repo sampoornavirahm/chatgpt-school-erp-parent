@@ -1727,19 +1727,124 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
 
   List<Map<String, dynamic>> _parentEmailTestChildren() {
     final now = DateTime.now();
-    final today = DateUtils.dateOnly(now).toIso8601String().substring(0, 10);
-    final yesterday = DateUtils.dateOnly(
-      now.subtract(const Duration(days: 1)),
+    String dateAt(int offset) => DateUtils.dateOnly(
+      now.add(Duration(days: offset)),
     ).toIso8601String().substring(0, 10);
-    final tomorrow = DateUtils.dateOnly(
-      now.add(const Duration(days: 1)),
-    ).toIso8601String().substring(0, 10);
+    final attendance = <Map<String, dynamic>>[];
+    var attendanceDay = DateUtils.dateOnly(now);
+    while (attendance.length < 12) {
+      if (attendanceDay.weekday <= DateTime.friday) {
+        final status = switch (attendance.length) {
+          2 => 'late',
+          7 => 'absent',
+          _ => 'present',
+        };
+        attendance.add({
+          'date': attendanceDay.toIso8601String().substring(0, 10),
+          'period': 0,
+          'status': status,
+          'statusLabel': switch (status) {
+            'late' => 'Late arrival',
+            'absent' => 'Absent',
+            _ => 'Present',
+          },
+          'revision': 1,
+          'updatedAt': DateTime(
+            attendanceDay.year,
+            attendanceDay.month,
+            attendanceDay.day,
+            15,
+          ).toUtc().toIso8601String(),
+        });
+      }
+      attendanceDay = attendanceDay.subtract(const Duration(days: 1));
+    }
+
+    final lessons = [
+      {
+        'period': 1,
+        'startTime': '08:00',
+        'endTime': '08:40',
+        'subjectName': 'Mathematics',
+        'teacherName': 'Rina Patel',
+        'room': 'Room 4',
+        'meetingLink': 'https://meet.example.test/class-3a-math',
+      },
+      {
+        'period': 2,
+        'startTime': '08:45',
+        'endTime': '09:25',
+        'subjectName': 'English',
+        'teacherName': 'Samir Khan',
+        'room': 'Room 2',
+      },
+      {
+        'period': 3,
+        'startTime': '09:45',
+        'endTime': '10:25',
+        'subjectName': 'Environmental Studies',
+        'teacherName': 'Anita Rao',
+        'room': 'Room 4',
+      },
+      {
+        'period': 4,
+        'startTime': '10:30',
+        'endTime': '11:10',
+        'subjectName': 'Hindi',
+        'teacherName': 'Meera Joshi',
+        'room': 'Room 1',
+      },
+      {
+        'period': 5,
+        'startTime': '11:30',
+        'endTime': '12:10',
+        'subjectName': 'Art',
+        'teacherName': 'Dev Menon',
+        'room': 'Art room',
+      },
+    ];
+    final timetable = <Map<String, dynamic>>[];
+    for (var weekday = DateTime.monday; weekday <= DateTime.friday; weekday++) {
+      for (final lesson in lessons) {
+        timetable.add({'weekday': weekday, ...lesson});
+      }
+    }
+
+    final calendarEvents = [
+      {
+        'id': 'calendar-1',
+        'schoolId': 'aster-school',
+        'schoolName': 'Aster School',
+        'title': 'Parent–teacher meeting',
+        'eventType': 'ptm',
+        'startDate': dateAt(3),
+        'notes': 'Class 3 · 9:00 am to 12:00 pm',
+      },
+      {
+        'id': 'calendar-2',
+        'schoolId': 'aster-school',
+        'schoolName': 'Aster School',
+        'title': 'Unit assessment · Mathematics',
+        'eventType': 'exam',
+        'startDate': dateAt(7),
+        'notes': 'Chapters 4–6',
+      },
+      {
+        'id': 'calendar-3',
+        'schoolId': 'aster-school',
+        'schoolName': 'Aster School',
+        'title': 'Science museum visit',
+        'eventType': 'trip',
+        'startDate': dateAt(12),
+        'notes': 'Students should bring a packed lunch.',
+      },
+    ];
     return [
       {
         'studentPublicId': 'f09d1716-604c-46b0-b163-2a286c97148e',
         'schoolName': 'Aster School',
         'schoolId': 'aster-school',
-        'schoolCalendar': <Map<String, dynamic>>[],
+        'schoolCalendar': calendarEvents,
         'schoolCalendarProjectedAt': now.toUtc().toIso8601String(),
         'linkStatus': 'linked',
         'accessLevel': 'full',
@@ -1750,49 +1855,90 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
             'className': 'Class 3',
             'sectionName': 'A',
           },
-          'attendance': [
-            {
-              'date': today,
-              'period': 0,
-              'status': 'present',
-              'statusLabel': 'Present',
-            },
-            {
-              'date': yesterday,
-              'period': 0,
-              'status': 'medical_leave',
-              'statusLabel': 'Medical leave',
-            },
-          ],
-          'timetable': [
-            {
-              'weekday': now.weekday,
-              'period': 1,
-              'startTime': '08:00',
-              'endTime': '08:40',
-              'subjectName': 'Mathematics',
-              'teacherName': 'Rina Patel',
-              'room': 'Room 4',
-            },
-          ],
+          'attendance': attendance,
+          'timetable': timetable,
           'homework': [
             {
               'title': 'Math practice',
-              'dueOn': tomorrow,
+              'dueOn': dateAt(1),
               'details': 'Complete pages 4–5.',
               'subjectName': 'Mathematics',
+            },
+            {
+              'title': 'My neighbourhood poster',
+              'dueOn': dateAt(3),
+              'details': 'Draw a map of your neighbourhood and label five important places.',
+              'subjectName': 'Environmental Studies',
+            },
+            {
+              'title': 'Reading log',
+              'dueOn': dateAt(5),
+              'details': 'Read one story and write three sentences about your favourite character.',
+              'subjectName': 'English',
             },
           ],
           'announcements': [
             {
               'title': 'Library day',
               'message': 'Bring your library book.',
-              'publishOn': today,
+              'publishOn': dateAt(0),
+            },
+            {
+              'title': 'Annual sports practice',
+              'message': 'Class practice will be held on the school field after lunch this Friday. Students should bring their house T-shirt and a water bottle.',
+              'publishOn': dateAt(-1),
+            },
+            {
+              'title': 'Updated pickup arrangements',
+              'message': 'The east gate will be used for Class 3 pickup this week while maintenance work is completed.',
+              'publishOn': dateAt(-2),
             },
           ],
-          'results': <Map<String, dynamic>>[],
+          'results': [
+            {
+              'examTitle': 'Unit 1 assessment',
+              'subjectName': 'Mathematics',
+              'marksAwarded': 18,
+              'maxMarks': 20,
+              'examDate': dateAt(-14),
+            },
+            {
+              'examTitle': 'Unit 1 assessment',
+              'subjectName': 'English',
+              'marksAwarded': 17,
+              'maxMarks': 20,
+              'examDate': dateAt(-13),
+            },
+            {
+              'examTitle': 'Reading fluency',
+              'subjectName': 'English',
+              'marksAwarded': 24,
+              'maxMarks': 25,
+              'examDate': dateAt(-9),
+            },
+          ],
           'fees': [
-            {'feeName': 'Tuition', 'amount': 5000, 'status': 'due'},
+            {
+              'feeName': 'Term 2 tuition',
+              'amount': 18000,
+              'paidAmount': 12000,
+              'status': 'part_paid',
+              'dueOn': dateAt(10),
+            },
+            {
+              'feeName': 'School transport · Term 2',
+              'amount': 6500,
+              'paidAmount': 0,
+              'status': 'due',
+              'dueOn': dateAt(10),
+            },
+            {
+              'feeName': 'Activity materials',
+              'amount': 1200,
+              'paidAmount': 1200,
+              'status': 'paid',
+              'dueOn': dateAt(-18),
+            },
           ],
         },
       },
