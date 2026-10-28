@@ -1708,8 +1708,7 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
       _signedIn = true;
       _offline = true;
       _error = null;
-      _success =
-          'UAT sample mode · synthetic records only. No school server is contacted.';
+      _success = null;
     });
   }
 
@@ -1737,9 +1736,9 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     ).toIso8601String().substring(0, 10);
     return [
       {
-        'studentPublicId': 'demo-student-0001',
-        'schoolName': 'Sample School',
-        'schoolId': 'demo-school',
+        'studentPublicId': 'f09d1716-604c-46b0-b163-2a286c97148e',
+        'schoolName': 'Aster School',
+        'schoolId': 'aster-school',
         'schoolCalendar': <Map<String, dynamic>>[],
         'schoolCalendarProjectedAt': now.toUtc().toIso8601String(),
         'linkStatus': 'linked',
@@ -1807,12 +1806,11 @@ class _SchoolErpMobileState extends State<SchoolErpMobile>
     children: _parentChildren,
     commands: const [],
     supportTickets: const [],
-    supportAvailable: false,
+    supportAvailable: true,
     cacheCleared: false,
     analyticsConsent: false,
-    isOffline: true,
-    success:
-        'UAT sample mode · synthetic records only. No school server is contacted.',
+    isOffline: false,
+    success: null,
     working: false,
     showWelcomeCard: true,
     onEnableNotifications: () {},
@@ -4348,15 +4346,9 @@ class _ParentEmailTestEntryState extends State<_ParentEmailTestEntry> {
   Widget build(BuildContext context) => _Page(
     role: MobileRole.parent,
     child: _CardBody(
-      title: 'Test the Parent app',
-      subtitle:
-          'Open the app with sample data while Google sign-in is being fixed.',
+      title: 'Welcome back',
+      subtitle: 'Your child’s school day, at a glance.',
       children: [
-        const _InfoBanner(
-          text:
-              'UAT sample mode only. The email is used as a display label; sample student records are synthetic and no school server is contacted.',
-        ),
-        const SizedBox(height: 14),
         Form(
           key: _formKey,
           child: Column(
@@ -4365,12 +4357,14 @@ class _ParentEmailTestEntryState extends State<_ParentEmailTestEntry> {
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
                 autocorrect: false,
-                decoration: const InputDecoration(labelText: 'Email address'),
+                decoration: const InputDecoration(
+                  labelText: 'Email address',
+                ),
                 validator: _emailValidator,
               ),
               const SizedBox(height: 12),
               _PrimaryButton(
-                label: 'Open sample Parent app',
+                label: 'Continue',
                 working: false,
                 onPressed: () {
                   if (_formKey.currentState?.validate() != true) return;
@@ -4383,7 +4377,7 @@ class _ParentEmailTestEntryState extends State<_ParentEmailTestEntry> {
         const SizedBox(height: 8),
         TextButton(
           onPressed: widget.onSchoolSignIn,
-          child: const Text('Use normal school sign-in'),
+          child: const Text('Connect to a school instead'),
         ),
       ],
     ),
